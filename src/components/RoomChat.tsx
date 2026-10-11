@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type KeyboardEvent } from "react";
 import { Camera, Check, CheckCheck, Eye, EyeOff, Image as ImageIcon, LoaderCircle, Mic, Plus, Reply, Send, Square, Trash2, Video, X } from "lucide-react";
+import { toast } from "sonner";
 
 import { MAX_MESSAGE_LENGTH, useRoomChat, type ChatMessage } from "@/hooks/useRoomChat";
 import { chatMediaUrl, MAX_VOICE_SECONDS, validateMedia, type MediaKind } from "@/lib/chat-media";
@@ -46,6 +47,9 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
   } = useRoomChat(roomId);
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
   const [viewOnceMode, setViewOnceMode] = useState(false);
+  useEffect(() => {
+    if (sendError) toast.error(sendError, { duration: 12000 });
+  }, [sendError]);
   const [onceViewer, setOnceViewer] = useState<OnceViewer | null>(null);
   const [actionsFor, setActionsFor] = useState<string | null>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
@@ -310,7 +314,7 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
           </div>
         )}
         {pending && (
-          <div className="msg-in mb-2 flex items-center gap-3 rounded-xl bg-secondary p-2">
+          <div className="msg-in mb-2 flex min-w-0 flex-wrap items-center gap-3 rounded-xl bg-secondary p-2">
             {pending.kind === "image" && <img src={pending.url} alt="Preview" className="h-16 w-16 rounded-lg object-cover" />}
             {pending.kind === "video" && <video src={pending.url} className="h-16 w-16 rounded-lg object-cover" muted playsInline />}
             {pending.kind === "audio" && <audio src={pending.url} controls className="h-10 flex-1" />}
@@ -330,6 +334,11 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
             <button type="button" onClick={() => setPending(null)} disabled={sending} aria-label="Cancel attachment" className="relative z-40 shrink-0 rounded-full p-1.5 hover:bg-muted disabled:opacity-40">
               <X className="h-4 w-4" />
             </button>
+            {sendError && (
+              <div role="alert" aria-live="assertive" className="w-full basis-full rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs leading-relaxed text-destructive [overflow-wrap:anywhere]">
+                {sendError}
+              </div>
+            )}
           </div>
         )}
 

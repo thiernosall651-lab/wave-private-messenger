@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type KeyboardEvent } from "react";
-import { Camera, Check, CheckCheck, Image as ImageIcon, Mic, Plus, Reply, Send, Square, Trash2, Video, X } from "lucide-react";
+import { Camera, Check, CheckCheck, Eye, EyeOff, Image as ImageIcon, Mic, Plus, Reply, Send, Square, Trash2, Video, X } from "lucide-react";
 
 import { MAX_MESSAGE_LENGTH, useRoomChat, type ChatMessage } from "@/hooks/useRoomChat";
-import { MAX_VOICE_SECONDS, validateMedia, type MediaKind } from "@/lib/chat-media";
+import { chatMediaUrl, MAX_VOICE_SECONDS, validateMedia, type MediaKind } from "@/lib/chat-media";
 import { Avatar } from "@/components/Avatar";
 import { AudioMessage, ImageMessage, Lightbox, VideoMessage } from "@/components/ChatMedia";
 
@@ -18,10 +18,16 @@ type Props = {
 
 const timeFmt = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
 type Pending = { kind: MediaKind; file: Blob; url: string };
+type OnceViewer = { kind: "text" | MediaKind; content: string; url: string | null };
 
 export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallpaper, onTypingChange }: Props) {
   const {
     messages,
+    featuresAvailable,
+    featureSchemaMissing,
+    uploadProgress,
+    openViewOnce,
+    toggleReaction,
     loading,
     loadError,
     hasMore,
@@ -39,6 +45,8 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
     ensureLoaded,
   } = useRoomChat(roomId);
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
+  const [viewOnceMode, setViewOnceMode] = useState(false);
+  const [onceViewer, setOnceViewer] = useState<OnceViewer | null>(null);
   const [actionsFor, setActionsFor] = useState<string | null>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
   const nameOf = (uid: string) => (uid === selfId ? "You" : peerName ?? "Friend");
@@ -69,6 +77,35 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
     }
     setTimeout(flash, 80);
   };
+
+  const openOnce = async (message: ChatMessage) => {
+    if (!message.view_once || message.viewed_at || message.user_id === selfId) return;
+    if (!featuresAvailable) {
+      setSendError("View-once messages need the WAVE database update first.");
+      return;
+    }
+    try {
+      const payload = await openViewOnce(message.id);
+      const kind = payload.kind || message.kind;
+      let url: string | null = null;
+      if (payload.media_path) {
+        url = await chatMediaUrl(payload.media_path, 10 * 60, "chat-view-once");
+        if (!url) throw new Error("The message was opened, but its media could not be loaded. Ask your friend to resend it.");
+      }
+      setOnceViewer({ kind, content: payload.content ?? "", url });
+    } catch (error) {
+      setSendError(error instanceof Error ? error.message : "Could not open this message.");
+    }
+  };
+
+  const reactToMessage = async (messageId: string, emoji: string) => {
+    try {
+      await toggleReaction(messageId, emoji);
+    } catch (error) {
+      setSendError(error instanceof Error ? error.message : "Could not save reaction.");
+    }
+  };
+
   const [text, setText] = useState("");
   const [pending, setPending] = useState<Pending | null>(null);
   const [menu, setMenu] = useState(false);
@@ -156,19 +193,21 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
   const submit = async () => {
     if (sending) return;
     if (pending) {
-      const ok = await sendMedia(selfId, pending.kind, pending.file, text, replyTo?.id ?? null);
+      const ok = await sendMedia(selfId, pending.kind, pending.file, text, replyTo?.id ?? null, viewOnceMode, setUploadProgress);
       if (ok) {
         setPending(null);
         setText("");
         setReplyTo(null);
+        setViewOnceMode(false);
       }
       return;
     }
     if (!text.trim()) return;
-    const ok = await send(selfId, text, replyTo?.id ?? null);
+    const ok = await send(selfId, text, replyTo?.id ?? null, viewOnceMode);
     if (ok) {
       setText("");
       setReplyTo(null);
+      setViewOnceMode(false);
     }
   };
 
@@ -225,6 +264,12 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
             onJump={(id) => void jumpTo(id)}
             actionsOpen={actionsFor === m.id}
             onActions={(open) => setActionsFor(open ? m.id : null)}
+            selfId={selfId}
+            onOpenOnce={(message) => void openOnce(message)}
+            onReact={(messageId, emoji) => {
+              void reactToMessage(messageId, emoji);
+              setActionsFor(null);
+            }}
             onReply={() => startReply(m)}
           />
         ))}
@@ -241,6 +286,9 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
       </div>
 
       <div className="border-t border-border bg-card px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2">
+        {featureSchemaMissing && (
+          <p className="mb-2 text-center text-[11px] text-muted-foreground">One-time messages and reactions will activate after the WAVE database migration is applied.</p>
+        )}
         {replyTo && (
           <div className="msg-in mb-2 flex items-center gap-2 rounded-xl border-l-4 border-primary bg-secondary py-1.5 pl-3 pr-1.5">
             <div className="min-w-0 flex-1">
@@ -260,7 +308,7 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
             {pending.kind === "video" && <video src={pending.url} className="h-16 w-16 rounded-lg object-cover" muted playsInline />}
             {pending.kind === "audio" && <audio src={pending.url} controls className="h-10 flex-1" />}
             <span className="flex-1 truncate text-xs text-muted-foreground">
-              {sending ? "Sending..." : pending.kind === "audio" ? "" : pending.kind === "image" ? "Photo ready to send" : "Video ready to send"}
+              {sending ? (pending.kind === "video" ? "Uploading " + uploadProgress + "%" : "Sending...") : pending.kind === "audio" ? "" : pending.kind === "image" ? "Photo ready to send" : "Video ready to send"}
             </span>
             <button onClick={() => setPending(null)} disabled={sending} aria-label="Cancel attachment" className="rounded-full p-1.5 hover:bg-muted">
               <X className="h-4 w-4" />
@@ -298,6 +346,18 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
           )}
           <input ref={galleryRef} type="file" accept={accept} className="hidden" onChange={onFile} />
           <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={onFile} />
+
+          <button
+            type="button"
+            onClick={() => setViewOnceMode((current) => !current)}
+            disabled={!featuresAvailable}
+            aria-label={viewOnceMode ? "Turn off view-once mode" : "Send as view once"}
+            aria-pressed={viewOnceMode}
+            title={featureSchemaMissing ? "Apply the WAVE database update to enable view-once messages" : "View once"}
+            className={"flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition-colors disabled:opacity-35 " + (viewOnceMode ? "bg-primary text-primary-foreground" : "bg-secondary text-foreground")}
+          >
+            {viewOnceMode ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+          </button>
 
           <textarea
             ref={textRef}
@@ -338,6 +398,20 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
         </div>
       </div>
       {lightbox && <Lightbox url={lightbox} onClose={() => setLightbox(null)} />}
+      {onceViewer && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/95 p-4" role="dialog" aria-modal="true" aria-label="View-once message">
+          <button onClick={() => setOnceViewer(null)} aria-label="Close view-once message" className="absolute right-4 top-4 rounded-full bg-secondary p-2">
+            <X className="h-5 w-5" />
+          </button>
+          <div className="max-h-full max-w-full overflow-auto rounded-xl bg-card p-3">
+            {onceViewer.kind === "text" && <p className="max-w-xl whitespace-pre-wrap break-words text-base">{onceViewer.content}</p>}
+            {onceViewer.kind === "image" && onceViewer.url && <img src={onceViewer.url} alt="View-once photo" className="fade-img max-h-[80dvh] max-w-full rounded-xl object-contain" />}
+            {onceViewer.kind === "video" && onceViewer.url && <video src={onceViewer.url} controls playsInline autoPlay className="max-h-[80dvh] max-w-full rounded-xl bg-background" />}
+            {onceViewer.kind === "audio" && onceViewer.url && <audio src={onceViewer.url} controls autoPlay className="w-full" />}
+            {onceViewer.kind !== "text" && onceViewer.content && <p className="mt-2 whitespace-pre-wrap break-words text-sm text-muted-foreground">{onceViewer.content}</p>}
+          </div>
+        </div>
+      )}
     </section>
   );
 }
@@ -357,6 +431,9 @@ function Bubble({
   actionsOpen,
   onActions,
   onReply,
+  selfId,
+  onOpenOnce,
+  onReact,
 }: {
   m: ChatMessage;
   own: boolean;
@@ -372,6 +449,9 @@ function Bubble({
   actionsOpen: boolean;
   onActions: (open: boolean) => void;
   onReply: () => void;
+  selfId: string;
+  onOpenOnce: (message: ChatMessage) => void;
+  onReact: (messageId: string, emoji: string) => void;
 }) {
   const press = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cancelPress = () => {
@@ -422,15 +502,44 @@ function Bubble({
               )}
             </button>
           )}
-          {m.kind === "image" && m.media_path && <ImageMessage path={m.media_path} onOpen={onOpen} />}
-          {m.kind === "video" && m.media_path && <VideoMessage path={m.media_path} />}
-          {m.kind === "audio" && m.media_path && <AudioMessage path={m.media_path} own={own} />}
-          {m.message && (
-            <p className={`whitespace-pre-wrap break-words text-sm ${media ? "px-2 py-1.5" : "px-3 py-2"}`}>{m.message}</p>
+          {m.view_once ? (
+            m.viewed_at ? (
+              <span className="block px-3 py-2 text-xs opacity-80">Opened</span>
+            ) : own ? (
+              <span className="block px-3 py-2 text-xs opacity-80">
+                {m.kind === "image" ? "Photo" : m.kind === "video" ? "Video" : m.kind === "audio" ? "Voice message" : "Message"} · View once
+              </span>
+            ) : (
+              <button type="button" onClick={() => onOpenOnce(m)} className="flex items-center gap-2 px-3 py-3 text-sm font-medium">
+                <Eye className="h-4 w-4" /> Tap to view once
+              </button>
+            )
+          ) : (
+            <>
+              {m.kind === "image" && m.media_path && <ImageMessage path={m.media_path} onOpen={onOpen} />}
+              {m.kind === "video" && m.media_path && <VideoMessage path={m.media_path} />}
+              {m.kind === "audio" && m.media_path && <AudioMessage path={m.media_path} own={own} />}
+              {m.message && (
+                <p className={`whitespace-pre-wrap break-words text-sm ${media ? "px-2 py-1.5" : "px-3 py-2"}`}>{m.message}</p>
+              )}
+            </>
           )}
         </div>
+        {Object.entries(m.reactions ?? {}).filter(([, users]) => Array.isArray(users) && users.length > 0).length > 0 && (
+          <div className="mt-1 flex flex-wrap gap-1">
+            {Object.entries(m.reactions ?? {}).filter(([, users]) => Array.isArray(users) && users.length > 0).map(([emoji, users]) => (
+              <button key={emoji} type="button" onClick={() => onReact(m.id, emoji)} aria-label={emoji + " reaction, " + users.length + " people"}
+                className={"rounded-full border px-2 py-0.5 text-xs transition-colors " + (users.includes(selfId) ? "border-primary bg-primary/15" : "border-border bg-card")}>
+                {emoji} {users.length}
+              </button>
+            ))}
+          </div>
+        )}
         {actionsOpen && (
-          <div className="msg-in mt-1 flex items-center gap-1 rounded-full border border-border bg-popover p-0.5 text-xs shadow-lg">
+          <div className="msg-in mt-1 flex max-w-[min(90vw,22rem)] flex-wrap items-center gap-1 rounded-full border border-border bg-popover p-1 text-xs shadow-lg">
+            {["❤️", "😂", "😮", "😢", "👍", "🙏", "🔥", "💯"].map((emoji) => (
+              <button key={emoji} type="button" onClick={() => onReact(m.id, emoji)} aria-label={"React with " + emoji} className="rounded-full px-1.5 py-1.5 text-base hover:bg-secondary">{emoji}</button>
+            ))}
             <button onClick={onReply} className="flex items-center gap-1 rounded-full px-3 py-1.5 hover:bg-secondary">
               <Reply className="h-3.5 w-3.5 text-primary" /> Reply
             </button>

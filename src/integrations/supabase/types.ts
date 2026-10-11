@@ -51,7 +51,11 @@ export type Database = {
           media_path: string | null
           message: string
           read_at: string | null
+          reactions: Json
           reply_to_message_id: string | null
+          view_once: boolean
+          viewed_at: string | null
+          viewed_by: string | null
           room_id: string
           user_id: string
         }
@@ -64,7 +68,11 @@ export type Database = {
           media_path?: string | null
           message: string
           read_at?: string | null
+          reactions?: Json
           reply_to_message_id?: string | null
+          view_once?: boolean
+          viewed_at?: string | null
+          viewed_by?: string | null
           room_id: string
           user_id: string
         }
@@ -77,7 +85,11 @@ export type Database = {
           media_path?: string | null
           message?: string
           read_at?: string | null
+          reactions?: Json
           reply_to_message_id?: string | null
+          view_once?: boolean
+          viewed_at?: string | null
+          viewed_by?: string | null
           room_id?: string
           user_id?: string
         }
@@ -166,6 +178,18 @@ export type Database = {
       mark_room_messages: {
         Args: { p_read: boolean; p_room_id: string }
         Returns: undefined
+      }
+      send_view_once_message: {
+        Args: { p_content: string; p_kind: string; p_media_mime: string | null; p_media_path: string | null; p_reply_to_message_id: string | null; p_room_id: string }
+        Returns: string
+      }
+      open_view_once_message: {
+        Args: { p_message_id: string }
+        Returns: Json
+      }
+      toggle_room_message_reaction: {
+        Args: { p_emoji: string; p_message_id: string }
+        Returns: Json
       }
     }
     Enums: {

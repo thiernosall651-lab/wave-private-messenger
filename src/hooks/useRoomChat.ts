@@ -19,9 +19,32 @@ export type ChatMessage = {
   delivered_at: string | null;
   read_at: string | null;
   reply_to_message_id?: string | null;
+  view_once: boolean;
+  viewed_at: string | null;
+  viewed_by: string | null;
+  reactions: Record<string, string[]>;
 };
 
-const FIELDS = "id, room_id, user_id, message, created_at, kind, media_path, media_mime, delivered_at, read_at, reply_to_message_id";
+const LEGACY_FIELDS = "id, room_id, user_id, message, created_at, kind, media_path, media_mime, delivered_at, read_at, reply_to_message_id";
+const FIELDS = LEGACY_FIELDS + ", view_once, viewed_at, viewed_by, reactions";
+const ALLOWED_REACTIONS = ["❤️", "😂", "😮", "😢", "👍", "🙏", "🔥", "💯"] as const;
+type ViewOncePayload = { already_opened?: boolean; kind: MediaKind | "text"; content: string | null; media_path: string | null; media_mime: string | null };
+
+function normalizeMessage(message: Partial<ChatMessage> & Record<string, unknown>): ChatMessage {
+  return {
+    ...(message as ChatMessage),
+    view_once: message.view_once === true,
+    viewed_at: typeof message.viewed_at === "string" ? message.viewed_at : null,
+    viewed_by: typeof message.viewed_by === "string" ? message.viewed_by : null,
+    reactions: message.reactions && typeof message.reactions === "object" && !Array.isArray(message.reactions)
+      ? message.reactions as Record<string, string[]>
+      : {},
+  };
+}
+
+function isFeatureSchemaError(message: string) {
+  return /view_once|viewed_at|viewed_by|reactions/i.test(message) && /column|schema cache|does not exist|could not find|missing/i.test(message);
+}
 
 const ts = (m: ChatMessage) => new Date(m.created_at).getTime();
 const byTime = (a: ChatMessage, b: ChatMessage) => ts(a) - ts(b) || a.id.localeCompare(b.id);
@@ -40,6 +63,11 @@ export function useRoomChat(roomId: string) {
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [featuresAvailable, setFeaturesAvailable] = useState(false);
+  const [featureSchemaMissing, setFeatureSchemaMissing] = useState(false);
+  const fieldsRef = useRef(FIELDS);
+  const reactionLocks = useRef(new Set<string>());
   const [typingUser, setTypingUser] = useState<string | null>(null);
   const [refs, setRefs] = useState<Record<string, ChatMessage | null>>({});
   const refsAsked = useRef(new Set<string>());
@@ -53,8 +81,9 @@ export function useRoomChat(roomId: string) {
     if (!incoming.length) return;
     setMessages((prev) => {
       const map = new Map(prev.map((m) => [m.id, m]));
-      for (const m of incoming) {
-        if (!m?.id) continue;
+      for (const raw of incoming) {
+        if (!raw?.id) continue;
+        const m = normalizeMessage(raw as unknown as Partial<ChatMessage> & Record<string, unknown>);
         const old = map.get(m.id);
         map.set(m.id, old ? { ...old, ...m } : m);
       }
@@ -64,35 +93,42 @@ export function useRoomChat(roomId: string) {
 
   /** Fetch the latest page from the database and merge it in (never replaces). */
   const syncLatest = useCallback(async () => {
-    const { data, error } = await supabase
-      .from("room_messages")
-      .select(FIELDS)
-      .eq("room_id", roomId)
-      .order("created_at", { ascending: false })
-      .order("id", { ascending: false })
-      .limit(PAGE_SIZE);
-    if (error) return { ok: false, count: 0 };
-    merge((data ?? []) as ChatMessage[]);
-    return { ok: true, count: data?.length ?? 0 };
+    const run = (fields: string) => supabase.from("room_messages").select(fields).eq("room_id", roomId)
+      .order("created_at", { ascending: false }).order("id", { ascending: false }).limit(PAGE_SIZE);
+    let result = await run(fieldsRef.current);
+    if (result.error && fieldsRef.current === FIELDS && isFeatureSchemaError(result.error.message)) {
+      fieldsRef.current = LEGACY_FIELDS;
+      setFeaturesAvailable(false);
+      setFeatureSchemaMissing(true);
+      result = await run(LEGACY_FIELDS);
+    } else if (!result.error && fieldsRef.current === FIELDS) {
+      setFeaturesAvailable(true);
+      setFeatureSchemaMissing(false);
+    }
+    if (result.error) return { ok: false, count: 0 };
+    merge((result.data ?? []).map((m) => normalizeMessage(m as unknown as Partial<ChatMessage> & Record<string, unknown>)));
+    return { ok: true, count: result.data?.length ?? 0 };
   }, [roomId, merge]);
 
   const loadOlder = useCallback(async () => {
     const oldest = messagesRef.current[0];
     if (!oldest || loadingOlder) return;
     setLoadingOlder(true);
-    const { data, error } = await supabase
-      .from("room_messages")
-      .select(FIELDS)
-      .eq("room_id", roomId)
-      .lt("created_at", oldest.created_at)
-      .order("created_at", { ascending: false })
-      .limit(PAGE_SIZE);
+    let result = await supabase.from("room_messages").select(fieldsRef.current).eq("room_id", roomId)
+      .lt("created_at", oldest.created_at).order("created_at", { ascending: false }).limit(PAGE_SIZE);
+    if (result.error && fieldsRef.current === FIELDS && isFeatureSchemaError(result.error.message)) {
+      fieldsRef.current = LEGACY_FIELDS;
+      setFeaturesAvailable(false);
+      setFeatureSchemaMissing(true);
+      result = await supabase.from("room_messages").select(LEGACY_FIELDS).eq("room_id", roomId)
+        .lt("created_at", oldest.created_at).order("created_at", { ascending: false }).limit(PAGE_SIZE);
+    }
     setLoadingOlder(false);
-    if (error) {
+    if (result.error) {
       setLoadError("Could not load earlier messages.");
       return;
     }
-    merge((data ?? []) as ChatMessage[]);
+    merge((result.data ?? []).map((m) => normalizeMessage(m as unknown as Partial<ChatMessage> & Record<string, unknown>)));
     setHasMore((data?.length ?? 0) === PAGE_SIZE);
   }, [roomId, merge, loadingOlder]);
 
@@ -191,7 +227,7 @@ export function useRoomChat(roomId: string) {
     missing.forEach((id) => refsAsked.current.add(id));
     void supabase
       .from("room_messages")
-      .select(FIELDS)
+      .select(fieldsRef.current)
       .eq("room_id", roomId)
       .in("id", missing)
       .then(({ data, error }) => {
@@ -214,24 +250,27 @@ export function useRoomChat(roomId: string) {
     async (id: string) => {
       if (messagesRef.current.some((m) => m.id === id)) return true;
       const oldest = messagesRef.current[0];
-      const { data: target } = await supabase
-        .from("room_messages")
-        .select(FIELDS)
-        .eq("room_id", roomId)
-        .eq("id", id)
-        .maybeSingle();
+      let targetResult = await supabase.from("room_messages").select(fieldsRef.current).eq("room_id", roomId).eq("id", id).maybeSingle();
+      if (targetResult.error && fieldsRef.current === FIELDS && isFeatureSchemaError(targetResult.error.message)) {
+        fieldsRef.current = LEGACY_FIELDS;
+        setFeaturesAvailable(false);
+        setFeatureSchemaMissing(true);
+        targetResult = await supabase.from("room_messages").select(LEGACY_FIELDS).eq("room_id", roomId).eq("id", id).maybeSingle();
+      }
+      const target = targetResult.data;
       if (!target || !oldest) return false;
-      const t = target as ChatMessage;
-      const { data, error } = await supabase
-        .from("room_messages")
-        .select(FIELDS)
-        .eq("room_id", roomId)
-        .gte("created_at", t.created_at)
-        .lte("created_at", oldest.created_at)
-        .order("created_at", { ascending: true })
-        .limit(2000);
-      if (error) return false;
-      merge([t, ...((data ?? []) as ChatMessage[])]);
+      const t = normalizeMessage(target as unknown as Partial<ChatMessage> & Record<string, unknown>);
+      let rangeResult = await supabase.from("room_messages").select(fieldsRef.current).eq("room_id", roomId)
+        .gte("created_at", t.created_at).lte("created_at", oldest.created_at).order("created_at", { ascending: true }).limit(2000);
+      if (rangeResult.error && fieldsRef.current === FIELDS && isFeatureSchemaError(rangeResult.error.message)) {
+        fieldsRef.current = LEGACY_FIELDS;
+        setFeaturesAvailable(false);
+        setFeatureSchemaMissing(true);
+        rangeResult = await supabase.from("room_messages").select(LEGACY_FIELDS).eq("room_id", roomId)
+          .gte("created_at", t.created_at).lte("created_at", oldest.created_at).order("created_at", { ascending: true }).limit(2000);
+      }
+      if (rangeResult.error) return false;
+      merge([t, ...((rangeResult.data ?? []).map((m) => normalizeMessage(m as unknown as Partial<ChatMessage> & Record<string, unknown>)))]);
       return true;
     },
     [roomId, merge],
@@ -248,22 +287,36 @@ export function useRoomChat(roomId: string) {
   /** Saves to the database first; the message only counts as sent once the row is returned. */
   const insert = useCallback(
     async (row: Record<string, unknown>) => {
-      const { data, error } = await supabase.from("room_messages").insert(row as never).select(FIELDS).single();
+      const { data, error } = await supabase.from("room_messages").insert(row as never).select(fieldsRef.current).single();
       if (error?.message?.includes("REPLY_INVALID")) throw new Error("The original message is no longer available.");
       if (error || !data) throw new Error("Message not sent. Try again.");
-      merge([data as ChatMessage]);
+      merge([normalizeMessage(data as unknown as Partial<ChatMessage> & Record<string, unknown>)]);
     },
     [merge],
   );
 
   const send = useCallback(
-    async (userId: string, text: string, replyTo: string | null = null) => {
+    async (userId: string, text: string, replyTo: string | null = null, viewOnce = false) => {
       const message = text.trim();
       if (!message || message.length > MAX_MESSAGE_LENGTH) return false;
+      if (viewOnce && !featuresAvailable) {
+        setSendError("View-once messages and reactions need the WAVE database update first.");
+        return false;
+      }
       setSending(true);
       setSendError(null);
       try {
-        await insert({ room_id: roomId, user_id: userId, message, ...(replyTo ? { reply_to_message_id: replyTo } : {}) });
+        if (viewOnce) {
+          const { data: id, error } = await supabase.rpc("send_view_once_message", {
+            p_room_id: roomId, p_kind: "text", p_content: message, p_media_path: null, p_media_mime: null, p_reply_to_message_id: replyTo,
+          });
+          if (error || !id) throw new Error(error?.message ?? "Could not send view-once message.");
+          const { data, error: fetchError } = await supabase.from("room_messages").select(fieldsRef.current).eq("id", id).single();
+          if (fetchError || !data) throw new Error("Message was sent, but the conversation needs to refresh.");
+          merge([normalizeMessage(data as unknown as Partial<ChatMessage> & Record<string, unknown>)]);
+        } else {
+          await insert({ room_id: roomId, user_id: userId, message, ...(replyTo ? { reply_to_message_id: replyTo } : {}) });
+        }
         notifyTyping(userId, true);
         return true;
       } catch (e) {
@@ -273,34 +326,73 @@ export function useRoomChat(roomId: string) {
         setSending(false);
       }
     },
-    [roomId, insert, notifyTyping],
+    [roomId, insert, notifyTyping, featuresAvailable, merge],
   );
 
   const sendMedia = useCallback(
-    async (userId: string, kind: MediaKind, file: Blob, caption = "", replyTo: string | null = null) => {
+    async (userId: string, kind: MediaKind, file: Blob, caption = "", replyTo: string | null = null, viewOnce = false, onProgress?: (percent: number) => void) => {
+      if (viewOnce && !featuresAvailable) {
+        setSendError("View-once messages and reactions need the WAVE database update first.");
+        return false;
+      }
       setSending(true);
+      setUploadProgress(0);
       setSendError(null);
       try {
-        const path = await uploadChatMedia(roomId, userId, kind, file);
-        await insert({
-          room_id: roomId,
-          user_id: userId,
-          kind,
-          media_path: path,
-          media_mime: file.type || null,
-          message: caption.trim().slice(0, MAX_MESSAGE_LENGTH),
-          ...(replyTo ? { reply_to_message_id: replyTo } : {}),
-        });
+        const path = await uploadChatMedia(roomId, userId, kind, file, onProgress ?? setUploadProgress, viewOnce);
+        if (viewOnce) {
+          const { data: id, error } = await supabase.rpc("send_view_once_message", {
+            p_room_id: roomId, p_kind: kind, p_content: caption.trim().slice(0, MAX_MESSAGE_LENGTH), p_media_path: path,
+            p_media_mime: file.type || null, p_reply_to_message_id: replyTo,
+          });
+          if (error || !id) {
+            void supabase.storage.from(viewOnce ? "chat-view-once" : "chat-media").remove([path]);
+            throw new Error(error?.message ?? "Could not send view-once media.");
+          }
+          const { data, error: fetchError } = await supabase.from("room_messages").select(fieldsRef.current).eq("id", id).single();
+          if (fetchError || !data) throw new Error("Media was sent, but the conversation needs to refresh.");
+          merge([normalizeMessage(data as unknown as Partial<ChatMessage> & Record<string, unknown>)]);
+        } else {
+          await insert({ room_id: roomId, user_id: userId, kind, media_path: path, media_mime: file.type || null,
+            message: caption.trim().slice(0, MAX_MESSAGE_LENGTH), ...(replyTo ? { reply_to_message_id: replyTo } : {}) });
+        }
+        setUploadProgress(100);
         return true;
       } catch (e) {
         setSendError(e instanceof Error ? e.message : "Upload failed. Try again.");
         return false;
       } finally {
         setSending(false);
+        setTimeout(() => setUploadProgress(0), 1200);
       }
     },
-    [roomId, insert],
+    [roomId, insert, featuresAvailable, merge],
   );
+
+  const openViewOnce = useCallback(async (messageId: string) => {
+    if (!featuresAvailable) throw new Error("View-once messages need the WAVE database update first.");
+    const { data, error } = await supabase.rpc("open_view_once_message", { p_message_id: messageId });
+    if (error) throw new Error(error.message.includes("ALREADY_OPENED") ? "This message has already been opened." : "Could not open this message. It may already have been viewed.");
+    const payload = data as unknown as ViewOncePayload;
+    if (payload?.already_opened) throw new Error("This message has already been opened.");
+    await syncLatest();
+    return payload;
+  }, [featuresAvailable, syncLatest]);
+
+  const toggleReaction = useCallback(async (messageId: string, emoji: string) => {
+    if (!featuresAvailable) throw new Error("Reactions need the WAVE database update first.");
+    if (!ALLOWED_REACTIONS.includes(emoji as (typeof ALLOWED_REACTIONS)[number])) throw new Error("Unsupported reaction.");
+    const lock = messageId + ":" + emoji;
+    if (reactionLocks.current.has(lock)) return;
+    reactionLocks.current.add(lock);
+    try {
+      const { data, error } = await supabase.rpc("toggle_room_message_reaction", { p_message_id: messageId, p_emoji: emoji });
+      if (error) throw new Error("Could not save reaction. Try again.");
+      setMessages((prev) => prev.map((m) => m.id === messageId ? { ...m, reactions: (data ?? {}) as unknown as Record<string, string[]> } : m));
+    } finally {
+      reactionLocks.current.delete(lock);
+    }
+  }, [featuresAvailable]);
 
   /** Mark the partner's messages delivered, and read when the conversation is actually visible. */
   const markSeen = useCallback(
@@ -312,6 +404,9 @@ export function useRoomChat(roomId: string) {
 
   return {
     messages,
+    featuresAvailable,
+    featureSchemaMissing,
+    uploadProgress,
     loading,
     loadError,
     hasMore,
@@ -322,6 +417,8 @@ export function useRoomChat(roomId: string) {
     setSendError,
     send,
     sendMedia,
+    openViewOnce,
+    toggleReaction,
     typingUser,
     notifyTyping,
     markSeen,

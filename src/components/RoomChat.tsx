@@ -314,10 +314,20 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
             {pending.kind === "image" && <img src={pending.url} alt="Preview" className="h-16 w-16 rounded-lg object-cover" />}
             {pending.kind === "video" && <video src={pending.url} className="h-16 w-16 rounded-lg object-cover" muted playsInline />}
             {pending.kind === "audio" && <audio src={pending.url} controls className="h-10 flex-1" />}
-            <span className="flex-1 truncate text-xs text-muted-foreground">
+            <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
               {sending ? (pending.kind === "video" ? "Uploading " + uploadProgress + "%" : "Sending...") : pending.kind === "audio" ? "" : pending.kind === "image" ? "Photo ready to send" : "Video ready to send"}
             </span>
-            <button onClick={() => setPending(null)} disabled={sending} aria-label="Cancel attachment" className="rounded-full p-1.5 hover:bg-muted">
+            <button
+              type="button"
+              onClick={() => void submit()}
+              disabled={sending}
+              aria-label={sending ? "Sending attachment" : pending.kind === "image" ? "Send photo" : pending.kind === "video" ? "Send video" : "Send voice message"}
+              className="relative z-40 flex h-9 shrink-0 items-center gap-1.5 rounded-full bg-primary px-3 text-xs font-medium text-primary-foreground touch-manipulation disabled:opacity-60"
+            >
+              {sending ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+              {sending ? (pending.kind === "video" ? uploadProgress + "%" : "Sending") : "Send"}
+            </button>
+            <button type="button" onClick={() => setPending(null)} disabled={sending} aria-label="Cancel attachment" className="relative z-40 shrink-0 rounded-full p-1.5 hover:bg-muted disabled:opacity-40">
               <X className="h-4 w-4" />
             </button>
           </div>

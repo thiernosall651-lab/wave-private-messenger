@@ -207,7 +207,7 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
     submitLockRef.current = true;
     try {
       if (pending) {
-        const ok = await sendMedia(selfId, pending.kind, pending.file, text, replyTo?.id ?? null, viewOnceMode, setUploadProgress);
+        const ok = await sendMedia(selfId, pending.kind, pending.file, text, replyTo?.id ?? null, viewOnceMode);
         if (ok) {
           setPending(null);
           setText("");

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type KeyboardEvent } from "react";
-import { Camera, Check, CheckCheck, Eye, EyeOff, Image as ImageIcon, Mic, Plus, Reply, Send, Square, Trash2, Video, X } from "lucide-react";
+import { Camera, Check, CheckCheck, Eye, EyeOff, Image as ImageIcon, LoaderCircle, Mic, Plus, Reply, Send, Square, Trash2, Video, X } from "lucide-react";
 
 import { MAX_MESSAGE_LENGTH, useRoomChat, type ChatMessage } from "@/hooks/useRoomChat";
 import { chatMediaUrl, MAX_VOICE_SECONDS, validateMedia, type MediaKind } from "@/lib/chat-media";
@@ -384,19 +384,27 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
 
           {text.trim() || pending ? (
             <button
+              type="button"
               onClick={() => void submit()}
               disabled={sending || tooLong}
-              aria-label="Send"
-              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground transition-transform active:scale-90 disabled:opacity-50"
+              aria-label={sending ? "Sending attachment" : pending ? "Send attachment" : "Send message"}
+              aria-busy={sending}
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground transition-transform active:scale-90 disabled:opacity-60"
             >
-              <Send className="h-5 w-5" />
+              {sending ? <LoaderCircle className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
             </button>
           ) : (
             <VoiceButton onDone={(blob) => pick("audio", blob)} onError={setSendError} />
           )}
         </div>
-        <div className="mt-1 flex min-h-4 flex-wrap items-start justify-between gap-1 px-1 text-[11px]">
-          <span role={sendError ? "alert" : undefined} className={sendError ? "min-w-0 max-w-full whitespace-normal break-words [overflow-wrap:anywhere] text-destructive" : "text-destructive"}>{sendError ?? (tooLong ? "Message is too long." : "")}</span>
+        <div className="mt-1 flex min-w-0 max-w-full flex-wrap items-start justify-between gap-1 px-1">
+          {sendError ? (
+            <div role="alert" aria-live="assertive" className="w-full rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs leading-relaxed text-destructive [overflow-wrap:anywhere]">
+              {sendError}
+            </div>
+          ) : tooLong ? (
+            <span className="text-xs text-destructive">Message is too long.</span>
+          ) : null}
           {text.length > 0 && (
             <span className={tooLong ? "text-destructive" : "text-muted-foreground"}>
               {text.length}/{MAX_MESSAGE_LENGTH}

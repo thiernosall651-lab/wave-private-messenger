@@ -393,8 +393,8 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
             <VoiceButton onDone={(blob) => pick("audio", blob)} onError={setSendError} />
           )}
         </div>
-        <div className="mt-1 flex min-h-4 justify-between px-1 text-[11px]">
-          <span className="text-destructive">{sendError ?? (tooLong ? "Message is too long." : "")}</span>
+        <div className="mt-1 flex min-h-4 flex-wrap items-start justify-between gap-1 px-1 text-[11px]">
+          <span role={sendError ? "alert" : undefined} className={sendError ? "min-w-0 max-w-full whitespace-normal break-words [overflow-wrap:anywhere] text-destructive" : "text-destructive"}>{sendError ?? (tooLong ? "Message is too long." : "")}</span>
           {text.length > 0 && (
             <span className={tooLong ? "text-destructive" : "text-muted-foreground"}>
               {text.length}/{MAX_MESSAGE_LENGTH}

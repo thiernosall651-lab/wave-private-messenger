@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 
 import { supabase } from "@/integrations/supabase/client";
-import { uploadChatMedia, type MediaKind } from "@/lib/chat-media";
+import { mediaMimeType, uploadChatMedia, type MediaKind } from "@/lib/chat-media";
 
 export const MAX_MESSAGE_LENGTH = 500;
 const PAGE_SIZE = 200;
@@ -339,7 +339,7 @@ export function useRoomChat(roomId: string) {
         if (viewOnce) {
           const { data: id, error } = await supabase.rpc("send_view_once_message", {
             p_room_id: roomId, p_kind: kind, p_content: caption.trim().slice(0, MAX_MESSAGE_LENGTH), p_media_path: uploadedPath,
-            p_media_mime: file.type || null, p_reply_to_message_id: replyTo,
+            p_media_mime: mediaMimeType(file, kind) || null, p_reply_to_message_id: replyTo,
           });
           if (error) throw new Error("Media uploaded, but the view-once message could not be saved: " + error.message);
           if (!id) throw new Error("Media uploaded, but no message ID was returned. Refresh the conversation.");
@@ -348,7 +348,7 @@ export function useRoomChat(roomId: string) {
           if (fetchError || !data) throw new Error("The view-once message was saved, but could not be loaded into the chat. Refresh the conversation.");
           merge([normalizeMessage(data as unknown as Partial<ChatMessage> & Record<string, unknown>)]);
         } else {
-          await insert({ room_id: roomId, user_id: userId, kind, media_path: uploadedPath, media_mime: file.type || null,
+          await insert({ room_id: roomId, user_id: userId, kind, media_path: uploadedPath, media_mime: mediaMimeType(file, kind) || null,
             message: caption.trim().slice(0, MAX_MESSAGE_LENGTH), ...(replyTo ? { reply_to_message_id: replyTo } : {}) });
           messageSaved = true;
         }

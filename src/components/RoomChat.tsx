@@ -181,7 +181,10 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
     const f = e.target.files?.[0];
     e.target.value = "";
     if (!f) return;
-    pick(f.type.startsWith("video/") ? "video" : "image", f);
+    const name = f.name.toLowerCase();
+    const knownVideoExtension = /\.(mp4|m4v|mov|webm|mkv|avi|3gp|mpeg|mpg|mts|m2ts)$/i.test(name);
+    const kind: MediaKind = f.type.toLowerCase().startsWith("video/") || knownVideoExtension ? "video" : "image";
+    pick(kind, f);
   };
 
   const openGallery = (a: string) => {

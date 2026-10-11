@@ -10,8 +10,39 @@ export const MEDIA_LIMITS: Record<MediaKind, number> = {
 export const MAX_VOICE_SECONDS = 60;
 
 const cache = new Map<string, { url: string; expiresAt: number }>();
-const RESUMABLE_THRESHOLD = 6 * 1024 * 1024;
+// Keep all photos (max 10 MB) on the standard SDK path; reserve TUS for larger media.
+const RESUMABLE_THRESHOLD = 12 * 1024 * 1024;
+const STANDARD_FALLBACK_LIMIT = 40 * 1024 * 1024;
 const RESUMABLE_CHUNK_SIZE = 6 * 1024 * 1024;
+
+const MIME_BY_EXTENSION: Record<string, string> = {
+  jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp", gif: "image/gif",
+  heic: "image/heic", heif: "image/heif", avif: "image/avif", bmp: "image/bmp",
+  mp4: "video/mp4", m4v: "video/mp4", mov: "video/quicktime", webm: "video/webm",
+  mkv: "video/x-matroska", avi: "video/x-msvideo", mpg: "video/mpeg", mpeg: "video/mpeg",
+  "3gp": "video/3gpp", mts: "video/mp2t", m2ts: "video/mp2t",
+  mp3: "audio/mpeg", m4a: "audio/mp4", aac: "audio/aac", wav: "audio/wav", ogg: "audio/ogg",
+};
+
+/** Desktop file pickers can report an empty or generic MIME type for valid media files. */
+export function mediaMimeType(file: Blob, kind: MediaKind): string {
+  const rawMime = (file.type || "").split(";")[0].trim().toLowerCase();
+  const ext = file instanceof File ? file.name.split(".").pop()?.toLowerCase() ?? "" : "";
+  const inferred = MIME_BY_EXTENSION[ext] ?? "";
+  const prefix = kind === "image" ? "image/" : kind === "video" ? "video/" : "audio/";
+  if (rawMime.startsWith(prefix)) return rawMime;
+  if ((!rawMime || rawMime === "application/octet-stream" || rawMime === "binary/octet-stream") && inferred.startsWith(prefix)) {
+    return inferred;
+  }
+  return rawMime || inferred;
+}
+
+function makeMediaPath(roomId: string, userId: string, kind: MediaKind, file: Blob, mime: string) {
+  const filenameExt = file instanceof File ? file.name.split(".").pop()?.toLowerCase() : undefined;
+  const typeExt = mime.split("/")[1]?.split(";")[0];
+  const ext = (filenameExt || typeExt || "bin").replace(/[^a-z0-9]/g, "").slice(0, 5) || "bin";
+  return `${roomId}/${userId}/${kind}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+}
 
 /** Chat media is in a private bucket; only room members can create signed URLs. */
 export async function chatMediaUrl(path: string, expiresInSeconds = 60 * 60, bucket = "chat-media"): Promise<string | null> {
@@ -33,7 +64,7 @@ function encodeMetadata(value: string) {
 }
 
 /** TUS upload in 6 MB chunks so large videos can recover from temporary network drops. */
-async function uploadResumable(path: string, file: Blob, onProgress?: (percent: number) => void, bucket = "chat-media") {
+async function uploadResumable(path: string, file: Blob, onProgress?: (percent: number) => void, bucket = "chat-media", contentType = "application/octet-stream") {
   const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
   const session = sessionData.session;
   if (sessionError || !session?.access_token) throw new Error("Sign in again before uploading this file.");
@@ -44,7 +75,7 @@ async function uploadResumable(path: string, file: Blob, onProgress?: (percent: 
   const projectRef = (env["VITE_SUPABASE_PROJECT_ID"] as string | undefined) || new URL(supabaseUrl).hostname.split(".")[0];
   const endpoint = "https://" + projectRef + ".storage.supabase.co/storage/v1/upload/resumable";
   const authHeaders = { authorization: "Bearer " + session.access_token, apikey: publicKey };
-  const metadata = Object.entries({ bucketName: bucket, objectName: path, contentType: file.type || "application/octet-stream", cacheControl: "3600" })
+  const metadata = Object.entries({ bucketName: bucket, objectName: path, contentType, cacheControl: "3600" })
     .map(([key, value]) => key + " " + encodeMetadata(value)).join(",");
   const create = await fetch(endpoint, { method: "POST", headers: { ...authHeaders, "Tus-Resumable": "1.0.0", "Upload-Length": String(file.size), "Upload-Metadata": metadata, "x-upsert": "false" } });
   if (!create.ok) {
@@ -95,30 +126,38 @@ async function uploadResumable(path: string, file: Blob, onProgress?: (percent: 
 }
 
 export function validateMedia(kind: MediaKind, file: Blob): string | null {
+  const mime = mediaMimeType(file, kind);
   const prefix = kind === "image" ? "image/" : kind === "video" ? "video/" : "audio/";
-  if (file.type && !file.type.startsWith(prefix)) return `Please choose a ${kind === "image" ? "photo" : kind} file.`;
+  if (!mime.startsWith(prefix)) return `Please choose a ${kind === "image" ? "photo" : kind} file.`;
   if (file.size > MEDIA_LIMITS[kind]) return `File is too large (max ${MEDIA_LIMITS[kind] / 1024 / 1024} MB).`;
   return null;
 }
 
 export async function uploadChatMedia(roomId: string, userId: string, kind: MediaKind, file: Blob, onProgress?: (percent: number) => void, viewOnce = false): Promise<string> {
-  const err = validateMedia(kind, file);
-  if (err) throw new Error(err);
-  const fromName = file instanceof File ? file.name.split(".").pop()?.toLowerCase() : undefined;
-  const fromType = file.type.split("/")[1]?.split(";")[0];
-  const ext = (fromName || fromType || "bin").replace(/[^a-z0-9]/g, "").slice(0, 5) || "bin";
-  const path = `${roomId}/${userId}/${kind}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+  const validationError = validateMedia(kind, file);
+  if (validationError) throw new Error(validationError);
+  const contentType = mediaMimeType(file, kind) || "application/octet-stream";
+  const path = makeMediaPath(roomId, userId, kind, file, contentType);
   const bucket = viewOnce ? "chat-view-once" : "chat-media";
-  try {
-    if (file.size > RESUMABLE_THRESHOLD) {
-      await uploadResumable(path, file, onProgress, bucket);
-    } else {
-      const { error } = await supabase.storage.from(bucket).upload(path, file, file.type ? { contentType: file.type } : {});
-      if (error) throw new Error(error.message);
-      onProgress?.(100);
-    }
+
+  if (file.size <= RESUMABLE_THRESHOLD) {
+    const { error } = await supabase.storage.from(bucket).upload(path, file, { contentType, cacheControl: "3600", upsert: false });
+    if (error) throw new Error("Storage upload failed: " + error.message);
+    onProgress?.(100);
     return path;
-  } catch (error) {
-    throw new Error(error instanceof Error ? error.message : "Upload failed. Check your connection and try again.");
+  }
+
+  try {
+    await uploadResumable(path, file, onProgress, bucket, contentType);
+    return path;
+  } catch (resumableError) {
+    // Some desktop browsers/extensions interrupt direct TUS requests. For medium files,
+    // retry once through the Storage SDK; keep resumable upload for files over 40 MB.
+    const resumableMessage = resumableError instanceof Error ? resumableError.message : "Resumable upload failed.";
+    if (file.size > STANDARD_FALLBACK_LIMIT) throw new Error(resumableMessage);
+    const { error: fallbackError } = await supabase.storage.from(bucket).upload(path, file, { contentType, cacheControl: "3600", upsert: false });
+    if (fallbackError) throw new Error(`Resumable upload failed (${resumableMessage}); standard retry failed (${fallbackError.message}).`);
+    onProgress?.(100);
+    return path;
   }
 }

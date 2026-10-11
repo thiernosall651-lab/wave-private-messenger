@@ -300,10 +300,6 @@ export function useRoomChat(roomId: string) {
     async (userId: string, text: string, replyTo: string | null = null, viewOnce = false) => {
       const message = text.trim();
       if (!message || message.length > MAX_MESSAGE_LENGTH) return false;
-      if (viewOnce && !featuresAvailable) {
-        setSendError("View-once messages and reactions need the WAVE database update first.");
-        return false;
-      }
       setSending(true);
       setSendError(null);
       try {
@@ -327,15 +323,11 @@ export function useRoomChat(roomId: string) {
         setSending(false);
       }
     },
-    [roomId, insert, notifyTyping, featuresAvailable, merge],
+    [roomId, insert, notifyTyping, merge],
   );
 
   const sendMedia = useCallback(
     async (userId: string, kind: MediaKind, file: Blob, caption = "", replyTo: string | null = null, viewOnce = false, onProgress?: (percent: number) => void) => {
-      if (viewOnce && !featuresAvailable) {
-        setSendError("View-once messages and reactions need the WAVE database update first. Refresh the conversation and try again.");
-        return false;
-      }
       setSending(true);
       setUploadProgress(0);
       setSendError(null);
@@ -374,7 +366,7 @@ export function useRoomChat(roomId: string) {
         setTimeout(() => setUploadProgress(0), 1200);
       }
     },
-    [roomId, insert, featuresAvailable, merge],
+    [roomId, insert, merge],
   );
 
   const openViewOnce = useCallback(async (messageId: string) => {

@@ -355,10 +355,9 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
           <button
             type="button"
             onClick={() => setViewOnceMode((current) => !current)}
-            disabled={!featuresAvailable}
             aria-label={viewOnceMode ? "Turn off view-once mode" : "Send as view once"}
             aria-pressed={viewOnceMode}
-            title={featureSchemaMissing ? "Apply the WAVE database update to enable view-once messages" : "View once"}
+            title={viewOnceMode ? "View-once mode enabled" : featureSchemaMissing ? "View-once mode: database support may be missing" : "View once"}
             className={"flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition-colors disabled:opacity-35 " + (viewOnceMode ? "bg-primary text-primary-foreground" : "bg-secondary text-foreground")}
           >
             {viewOnceMode ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}

@@ -53,6 +53,7 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
   const [onceViewer, setOnceViewer] = useState<OnceViewer | null>(null);
   const [actionsFor, setActionsFor] = useState<string | null>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
+  const submitLockRef = useRef(false);
   const nameOf = (uid: string) => (uid === selfId ? "You" : peerName ?? "Friend");
   const findMsg = (id: string) => messages.find((m) => m.id === id) ?? refs[id] ?? null;
 
@@ -202,23 +203,28 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
   };
 
   const submit = async () => {
-    if (sending) return;
-    if (pending) {
-      const ok = await sendMedia(selfId, pending.kind, pending.file, text, replyTo?.id ?? null, viewOnceMode, setUploadProgress);
+    if (sending || submitLockRef.current) return;
+    submitLockRef.current = true;
+    try {
+      if (pending) {
+        const ok = await sendMedia(selfId, pending.kind, pending.file, text, replyTo?.id ?? null, viewOnceMode, setUploadProgress);
+        if (ok) {
+          setPending(null);
+          setText("");
+          setReplyTo(null);
+          setViewOnceMode(false);
+        }
+        return;
+      }
+      if (!text.trim()) return;
+      const ok = await send(selfId, text, replyTo?.id ?? null, viewOnceMode);
       if (ok) {
-        setPending(null);
         setText("");
         setReplyTo(null);
         setViewOnceMode(false);
       }
-      return;
-    }
-    if (!text.trim()) return;
-    const ok = await send(selfId, text, replyTo?.id ?? null, viewOnceMode);
-    if (ok) {
-      setText("");
-      setReplyTo(null);
-      setViewOnceMode(false);
+    } finally {
+      submitLockRef.current = false;
     }
   };
 
@@ -323,7 +329,15 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
             </span>
             <button
               type="button"
-              onClick={() => void submit()}
+              onPointerUp={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                void submit();
+              }}
+              onClick={(event) => {
+                // Pointer clicks are handled on pointerup; detail=0 preserves keyboard/screen-reader activation.
+                if (event.detail === 0) void submit();
+              }}
               disabled={sending}
               aria-label={sending ? "Sending attachment" : pending.kind === "image" ? "Send photo" : pending.kind === "video" ? "Send video" : "Send voice message"}
               className="relative z-40 flex h-9 shrink-0 items-center gap-1.5 rounded-full bg-primary px-3 text-xs font-medium text-primary-foreground touch-manipulation disabled:opacity-60"
@@ -404,7 +418,15 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
           {text.trim() || pending ? (
             <button
               type="button"
-              onClick={() => void submit()}
+              onPointerUp={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                void submit();
+              }}
+              onClick={(event) => {
+                // Pointer clicks are handled on pointerup; detail=0 preserves keyboard/screen-reader activation.
+                if (event.detail === 0) void submit();
+              }}
               disabled={sending || tooLong}
               aria-label={sending ? "Sending attachment" : pending ? "Send attachment" : "Send message"}
               aria-busy={sending}

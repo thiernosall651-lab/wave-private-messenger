@@ -187,7 +187,11 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
   const openGallery = (a: string) => {
     setAccept(a);
     setMenu(false);
-    setTimeout(() => galleryRef.current?.click(), 0);
+    const input = galleryRef.current;
+    if (input) {
+      input.accept = a;
+      input.click();
+    }
   };
 
   const submit = async () => {
@@ -285,7 +289,7 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
         )}
       </div>
 
-      <div className="min-w-0 max-w-full overflow-x-hidden border-t border-border bg-card px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2">
+      <div className="relative z-20 min-w-0 max-w-full overflow-x-clip border-t border-border bg-card px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2">
         {featureSchemaMissing && (
           <p className="mb-2 text-center text-[11px] text-muted-foreground">One-time messages and reactions will activate after the WAVE database migration is applied.</p>
         )}
@@ -318,6 +322,7 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
 
         <div className="relative flex min-w-0 max-w-full items-end gap-2">
           <button
+            type="button"
             onClick={() => setMenu((v) => !v)}
             aria-label="Add photo or video"
             aria-expanded={menu}
@@ -326,7 +331,7 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
             <Plus className="h-5 w-5" />
           </button>
           {menu && (
-            <div className="msg-in absolute bottom-14 left-0 z-10 flex flex-col overflow-hidden rounded-xl border border-border bg-popover text-sm shadow-lg">
+            <div className="msg-in absolute bottom-14 left-0 z-30 flex min-w-36 flex-col overflow-hidden rounded-xl border border-border bg-popover text-sm shadow-lg">
               <button onClick={() => openGallery("image/*")} className="flex items-center gap-2 px-4 py-2.5 hover:bg-secondary">
                 <ImageIcon className="h-4 w-4 text-primary" /> Photo
               </button>

@@ -28,14 +28,14 @@ export function ImageMessage({ path, onOpen }: { path: string; onOpen: (url: str
   const [loaded, setLoaded] = useState(false);
   if (failed) return <p className="px-3 py-2 text-xs opacity-80">Photo unavailable</p>;
   return (
-    <button onClick={() => url && onOpen(url)} className="block overflow-hidden rounded-xl" aria-label="View photo">
-      {!loaded && <div className="h-48 w-56 animate-pulse bg-muted" />}
+    <button onClick={() => url && onOpen(url)} className="block w-full max-w-[min(16rem,calc(100vw-6.5rem))] min-w-0 overflow-hidden rounded-xl" aria-label="View photo">
+      {!loaded && <div className="h-48 w-full max-w-full animate-pulse bg-muted" />}
       {url && (
         <img
           src={url}
           alt="Shared photo"
           onLoad={() => setLoaded(true)}
-          className={`max-h-72 w-full max-w-64 object-cover ${loaded ? "fade-img" : "hidden"}`}
+          className={`block max-h-72 w-full max-w-full object-cover ${loaded ? "fade-img" : "hidden"}`}
         />
       )}
     </button>
@@ -45,8 +45,8 @@ export function ImageMessage({ path, onOpen }: { path: string; onOpen: (url: str
 export function VideoMessage({ path }: { path: string }) {
   const { url, failed } = useSignedUrl(path);
   if (failed) return <p className="px-3 py-2 text-xs opacity-80">Video unavailable</p>;
-  if (!url) return <div className="h-40 w-56 animate-pulse rounded-xl bg-muted" />;
-  return <video src={url} controls playsInline preload="metadata" className="fade-img max-h-72 w-full max-w-64 rounded-xl bg-background" />;
+  if (!url) return <div className="h-40 w-full max-w-[min(16rem,calc(100vw-6.5rem))] animate-pulse rounded-xl bg-muted" />;
+  return <video src={url} controls playsInline preload="metadata" className="fade-img block max-h-72 w-full max-w-[min(16rem,calc(100vw-6.5rem))] rounded-xl bg-background" />;
 }
 
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
@@ -65,7 +65,7 @@ export function AudioMessage({ path, own }: { path: string; own: boolean }) {
     else a.pause();
   };
   return (
-    <div className="flex min-w-48 items-center gap-3 px-3 py-2">
+    <div className="flex w-full min-w-0 max-w-[min(16rem,calc(100vw-6.5rem))] items-center gap-2 px-2 py-2">
       <button
         onClick={toggle}
         disabled={!url}
@@ -74,7 +74,7 @@ export function AudioMessage({ path, own }: { path: string; own: boolean }) {
       >
         {playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
       </button>
-      <div className="flex h-6 flex-1 items-end gap-[3px]" aria-hidden>
+      <div className="flex min-w-0 flex-1 items-end gap-[3px]" aria-hidden>
         {Array.from({ length: 14 }).map((_, i) => (
           <span
             key={i}

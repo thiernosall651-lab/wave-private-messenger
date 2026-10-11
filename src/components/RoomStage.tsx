@@ -73,7 +73,7 @@ export function RoomStage({ roomId, code, selfId, firstName, nickname, avatarPat
   const toggle = (p: "wallpaper" | "profile") => setPanel((v) => (v === p ? "none" : p));
 
   return (
-    <main className="mx-auto flex h-[100dvh] w-full max-w-md flex-col">
+    <main className="mx-auto flex h-[100dvh] w-full min-w-0 max-w-md flex-col overflow-x-hidden">
       <header className="flex items-center gap-2 border-b border-border bg-card px-2 py-2">
         <button onClick={handleLeave} disabled={leaving} aria-label="Leave room" className="rounded-full p-2 text-muted-foreground hover:text-foreground">
           <ArrowLeft className="h-5 w-5" />
@@ -106,7 +106,7 @@ export function RoomStage({ roomId, code, selfId, firstName, nickname, avatarPat
       </header>
 
       <div className="flex items-center justify-between gap-2 border-b border-border bg-card/60 px-3 py-1.5 text-[11px] text-muted-foreground">
-        <span>
+        <span className="min-w-0 flex-1 truncate">
           {status === "mic-denied" ? "Microphone blocked" : micEnabled ? "Microphone on" : "Microphone muted"}
           {peer && status !== "mic-denied" && (
             <span className={`ml-2 ${audioOk ? "text-success" : status === "failed" || status === "error" ? "text-destructive" : "text-primary"}`}>
@@ -115,7 +115,7 @@ export function RoomStage({ roomId, code, selfId, firstName, nickname, avatarPat
           )}
           {errorMessage && !audioOk && <span className="ml-2 text-destructive">{errorMessage}</span>}
         </span>
-        <button onClick={copyCode} className="flex items-center gap-1 font-display tracking-[0.15em] hover:text-foreground">
+        <button onClick={copyCode} className="flex shrink-0 items-center gap-1 font-display tracking-[0.15em] hover:text-foreground">
           {code} <Copy className="h-3 w-3" />
         </button>
       </div>

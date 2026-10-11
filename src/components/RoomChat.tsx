@@ -232,8 +232,8 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
   const lastOwnId = [...messages].reverse().find((m) => m.user_id === selfId)?.id;
 
   return (
-    <section className="flex min-h-0 flex-1 flex-col" aria-label="Conversation">
-      <div ref={listRef} className={`${wallpaper} flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-3 py-4`}>
+    <section className="flex min-h-0 w-full min-w-0 max-w-full flex-1 flex-col overflow-hidden" aria-label="Conversation">
+      <div ref={listRef} className={`${wallpaper} flex min-h-0 w-full min-w-0 max-w-full flex-1 flex-col gap-1 overflow-x-hidden overflow-y-auto px-3 py-4`}>
         {hasMore && !loading && (
           <button
             onClick={showOlder}
@@ -285,7 +285,7 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
         )}
       </div>
 
-      <div className="border-t border-border bg-card px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2">
+      <div className="min-w-0 max-w-full overflow-x-hidden border-t border-border bg-card px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2">
         {featureSchemaMissing && (
           <p className="mb-2 text-center text-[11px] text-muted-foreground">One-time messages and reactions will activate after the WAVE database migration is applied.</p>
         )}
@@ -316,7 +316,7 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
           </div>
         )}
 
-        <div className="relative flex items-end gap-2">
+        <div className="relative flex min-w-0 max-w-full items-end gap-2">
           <button
             onClick={() => setMenu((v) => !v)}
             aria-label="Add photo or video"
@@ -372,7 +372,7 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
             rows={1}
             placeholder={pending && pending.kind !== "audio" ? "Add a caption..." : "Message"}
             aria-label="Message"
-            className="max-h-32 min-h-11 flex-1 resize-none rounded-2xl border border-border bg-background px-4 py-2.5 text-base outline-none focus:border-primary sm:text-sm"
+            className="max-h-32 min-h-11 min-w-0 flex-1 resize-none rounded-2xl border border-border bg-background px-4 py-2.5 text-base outline-none focus:border-primary sm:text-sm"
           />
 
           {text.trim() || pending ? (
@@ -465,7 +465,7 @@ function Bubble({
   return (
     <div
       data-mid={m.id}
-      className={`msg-in group relative flex max-w-[82%] items-end gap-2 ${own ? "self-end flex-row-reverse" : "self-start"} ${firstInGroup ? "mt-2" : ""}`}
+      className={`msg-in group relative flex min-w-0 max-w-[82%] items-end gap-2 ${own ? "self-end flex-row-reverse" : "self-start"} ${firstInGroup ? "mt-2" : ""}`}
       onTouchStart={() => {
         cancelPress();
         press.current = setTimeout(() => {
@@ -481,14 +481,14 @@ function Bubble({
       }}
     >
       {!own && (lastInGroup ? <Avatar path={peerAvatar} name={name} size={24} /> : <span className="w-6 shrink-0" />)}
-      <div className={`flex flex-col ${own ? "items-end" : "items-start"}`}>
+      <div className={`flex min-w-0 max-w-full flex-col ${own ? "items-end" : "items-start"}`}>
         {!own && firstInGroup && <span className="mb-0.5 ml-1 text-[11px] font-medium text-primary">{name}</span>}
-        <div className={`${shape} overflow-hidden ${media && m.kind !== "audio" ? "p-1" : ""}`}>
+        <div className={`min-w-0 max-w-full overflow-hidden ${shape} ${media && m.kind !== "audio" ? "p-1" : ""}`}>
           {m.reply_to_message_id && (
             <button
               type="button"
               onClick={() => quoted && onJump(quoted.id)}
-              className={`m-1 mb-0 block w-[calc(100%-0.5rem)] min-w-28 max-w-full rounded-lg border-l-4 px-2 py-1 text-left ${
+              className={`m-1 mb-0 block w-[calc(100%-0.5rem)] min-w-0 max-w-full overflow-hidden rounded-lg border-l-4 px-2 py-1 text-left ${
                 own ? "border-primary-foreground/70 bg-primary-foreground/15" : "border-primary bg-background/40"
               }`}
             >
@@ -520,7 +520,7 @@ function Bubble({
               {m.kind === "video" && m.media_path && <VideoMessage path={m.media_path} />}
               {m.kind === "audio" && m.media_path && <AudioMessage path={m.media_path} own={own} />}
               {m.message && (
-                <p className={`whitespace-pre-wrap break-words text-sm ${media ? "px-2 py-1.5" : "px-3 py-2"}`}>{m.message}</p>
+                <p className={`max-w-full whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-sm ${media ? "px-2 py-1.5" : "px-3 py-2"}`}>{m.message}</p>
               )}
             </>
           )}
@@ -536,7 +536,7 @@ function Bubble({
           </div>
         )}
         {actionsOpen && (
-          <div className="msg-in mt-1 flex max-w-[min(90vw,22rem)] flex-wrap items-center gap-1 rounded-full border border-border bg-popover p-1 text-xs shadow-lg">
+          <div className="msg-in mt-1 flex max-w-full flex-wrap items-center gap-1 rounded-full border border-border bg-popover p-1 text-xs shadow-lg">
             {["❤️", "😂", "😮", "😢", "👍", "🙏", "🔥", "💯"].map((emoji) => (
               <button key={emoji} type="button" onClick={() => onReact(m.id, emoji)} aria-label={"React with " + emoji} className="rounded-full px-1.5 py-1.5 text-base hover:bg-secondary">{emoji}</button>
             ))}

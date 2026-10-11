@@ -129,7 +129,7 @@ export function useRoomChat(roomId: string) {
       return;
     }
     merge((result.data ?? []).map((m) => normalizeMessage(m as unknown as Partial<ChatMessage> & Record<string, unknown>)));
-    setHasMore((data?.length ?? 0) === PAGE_SIZE);
+    setHasMore((result.data?.length ?? 0) === PAGE_SIZE);
   }, [roomId, merge, loadingOlder]);
 
   useEffect(() => {

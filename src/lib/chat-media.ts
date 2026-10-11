@@ -4,7 +4,7 @@ export type MediaKind = "image" | "video" | "audio";
 
 export const MEDIA_LIMITS: Record<MediaKind, number> = {
   image: 10 * 1024 * 1024,
-  video: 200 * 1024 * 1024,
+  video: 50 * 1024 * 1024,
   audio: 5 * 1024 * 1024,
 };
 export const MAX_VOICE_SECONDS = 60;

@@ -4,6 +4,9 @@
   "main": ".output/server/index.mjs",
   "compatibility_date": "2026-10-11",
   "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "SUPABASE_URL": "https://zonipaqhuqgojefmvdgf.supabase.co"
+  },
   "assets": {
     "directory": ".output/public",
     "binding": "ASSETS"

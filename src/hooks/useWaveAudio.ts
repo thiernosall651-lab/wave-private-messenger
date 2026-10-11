@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 
 import { supabase } from "@/integrations/supabase/client";
-import { RTC_CONFIG, type ConnectionStatus } from "@/lib/webrtc-config";
+import { RTC_CONFIG, loadIceServers, type ConnectionStatus } from "@/lib/webrtc-config";
 
 type SignalPayload = {
   from: string;
@@ -312,6 +312,7 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
         }
         return;
       }
+      await loadIceServers();
       if (cancelled) {
         stream.getTracks().forEach((t) => t.stop());
         return;

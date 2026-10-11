@@ -1,3 +1,5 @@
+import { getIceServers } from "./turn.functions";
+
 /**
  * Central WebRTC transport configuration.
  *
@@ -13,6 +15,23 @@ export const RTC_CONFIG: RTCConfiguration = {
   ],
   iceCandidatePoolSize: 2,
 };
+
+let iceLoaded = false;
+
+/** Fetch TURN credentials once per page load and merge them into RTC_CONFIG. */
+export async function loadIceServers(): Promise<void> {
+  if (iceLoaded) return;
+  try {
+    const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 4000));
+    const result = await Promise.race([getIceServers(), timeout]);
+    if (result && result.iceServers.length > 0) {
+      RTC_CONFIG.iceServers = [...(RTC_CONFIG.iceServers ?? []), ...result.iceServers];
+      iceLoaded = true;
+    }
+  } catch {
+    /* keep STUN-only fallback */
+  }
+}
 
 export type ConnectionStatus =
   | "idle"

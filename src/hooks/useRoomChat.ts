@@ -289,7 +289,8 @@ export function useRoomChat(roomId: string) {
     async (row: Record<string, unknown>) => {
       const { data, error } = await supabase.from("room_messages").insert(row as never).select(fieldsRef.current).single();
       if (error?.message?.includes("REPLY_INVALID")) throw new Error("The original message is no longer available.");
-      if (error || !data) throw new Error("Message not sent. Try again.");
+      if (error) throw new Error("Message could not be saved: " + error.message);
+      if (!data) throw new Error("Message could not be confirmed by the database. Refresh the conversation before retrying.");
       merge([normalizeMessage(data as unknown as Partial<ChatMessage> & Record<string, unknown>)]);
     },
     [merge],
@@ -332,34 +333,41 @@ export function useRoomChat(roomId: string) {
   const sendMedia = useCallback(
     async (userId: string, kind: MediaKind, file: Blob, caption = "", replyTo: string | null = null, viewOnce = false, onProgress?: (percent: number) => void) => {
       if (viewOnce && !featuresAvailable) {
-        setSendError("View-once messages and reactions need the WAVE database update first.");
+        setSendError("View-once messages and reactions need the WAVE database update first. Refresh the conversation and try again.");
         return false;
       }
       setSending(true);
       setUploadProgress(0);
       setSendError(null);
+      let uploadedPath: string | null = null;
+      let messageSaved = false;
+      const bucket = viewOnce ? "chat-view-once" : "chat-media";
       try {
-        const path = await uploadChatMedia(roomId, userId, kind, file, onProgress ?? setUploadProgress, viewOnce);
+        uploadedPath = await uploadChatMedia(roomId, userId, kind, file, onProgress ?? setUploadProgress, viewOnce);
         if (viewOnce) {
           const { data: id, error } = await supabase.rpc("send_view_once_message", {
-            p_room_id: roomId, p_kind: kind, p_content: caption.trim().slice(0, MAX_MESSAGE_LENGTH), p_media_path: path,
+            p_room_id: roomId, p_kind: kind, p_content: caption.trim().slice(0, MAX_MESSAGE_LENGTH), p_media_path: uploadedPath,
             p_media_mime: file.type || null, p_reply_to_message_id: replyTo,
           });
-          if (error || !id) {
-            void supabase.storage.from(viewOnce ? "chat-view-once" : "chat-media").remove([path]);
-            throw new Error(error?.message ?? "Could not send view-once media.");
-          }
+          if (error) throw new Error("Media uploaded, but the view-once message could not be saved: " + error.message);
+          if (!id) throw new Error("Media uploaded, but no message ID was returned. Refresh the conversation.");
+          messageSaved = true;
           const { data, error: fetchError } = await supabase.from("room_messages").select(fieldsRef.current).eq("id", id).single();
-          if (fetchError || !data) throw new Error("Media was sent, but the conversation needs to refresh.");
+          if (fetchError || !data) throw new Error("The view-once message was saved, but could not be loaded into the chat. Refresh the conversation.");
           merge([normalizeMessage(data as unknown as Partial<ChatMessage> & Record<string, unknown>)]);
         } else {
-          await insert({ room_id: roomId, user_id: userId, kind, media_path: path, media_mime: file.type || null,
+          await insert({ room_id: roomId, user_id: userId, kind, media_path: uploadedPath, media_mime: file.type || null,
             message: caption.trim().slice(0, MAX_MESSAGE_LENGTH), ...(replyTo ? { reply_to_message_id: replyTo } : {}) });
+          messageSaved = true;
         }
         setUploadProgress(100);
         return true;
       } catch (e) {
-        setSendError(e instanceof Error ? e.message : "Upload failed. Try again.");
+        if (uploadedPath && !messageSaved) {
+          // Avoid orphaned uploads when the database rejects the message row.
+          void supabase.storage.from(bucket).remove([uploadedPath]);
+        }
+        setSendError(e instanceof Error ? e.message : "Upload failed. Check the connection and retry.");
         return false;
       } finally {
         setSending(false);

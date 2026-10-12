@@ -1,13 +1,15 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { ArrowLeft, Copy, Mic, MicOff, Palette, UserRound } from "lucide-react";
+import { ArrowLeft, Bell, BellOff, BellRing, Copy, Mic, MicOff, Palette, UserRound, Video, VideoOff } from "lucide-react";
 
 import { useWaveAudio } from "@/hooks/useWaveAudio";
 import { useRoomPeer } from "@/hooks/useRoomPeer";
+import { usePeerAlerts } from "@/hooks/usePeerAlerts";
 import { STATUS_LABEL } from "@/lib/webrtc-config";
 import { RoomChat } from "@/components/RoomChat";
 import { Avatar } from "@/components/Avatar";
 import { ProfileCard } from "@/components/ProfileCard";
+import { VideoPanel } from "@/components/VideoPanel";
 
 type Props = {
   roomId: string;
@@ -33,12 +35,28 @@ const WP_KEY = "wave-wallpaper";
 
 export function RoomStage({ roomId, code, selfId, firstName, nickname, avatarPath, status: selfStatus, onProfileChange, onLeave }: Props) {
   // WebRTC audio engine — used as-is.
-  const { status, micEnabled, toggleMic, peer, errorMessage, remoteAudioRef } = useWaveAudio({ roomId, selfId, firstName });
+  const {
+    status,
+    micEnabled,
+    toggleMic,
+    peer,
+    errorMessage,
+    remoteAudioRef,
+    cameraEnabled,
+    cameraFacing,
+    cameraError,
+    toggleCamera,
+    flipCamera,
+    localVideoStream,
+    remoteVideoStream,
+    remoteCameraOn,
+  } = useWaveAudio({ roomId, selfId, firstName });
   const { peer: profile, announce } = useRoomPeer(roomId, selfId, peer ? `${peer.firstName}` : null);
   const [leaving, setLeaving] = useState(false);
   const [typing, setTyping] = useState(false);
   const [wallpaper, setWallpaper] = useState<string>("wp-default");
   const [panel, setPanel] = useState<"none" | "wallpaper" | "profile">("none");
+  const [remoteHidden, setRemoteHidden] = useState(false);
 
   useEffect(() => {
     const saved = localStorage.getItem(WP_KEY);
@@ -55,6 +73,18 @@ export function RoomStage({ roomId, code, selfId, firstName, nickname, avatarPat
   const audioOk = status === "connected";
   const peerName = profile?.first_name || peer?.firstName || null;
   const subtitle = !peer ? "Waiting for your friend..." : typing ? "typing..." : profile?.status || "Online";
+
+  const { permission, enableNotifications } = usePeerAlerts({ online, name: peerName });
+
+  useEffect(() => {
+    if (!remoteCameraOn) setRemoteHidden(false);
+  }, [remoteCameraOn]);
+
+  useEffect(() => {
+    if (cameraError) toast.error(cameraError);
+  }, [cameraError]);
+
+  const showRemote = remoteCameraOn && !remoteHidden && !!remoteVideoStream;
 
   const copyCode = async () => {
     try {
@@ -97,6 +127,15 @@ export function RoomStage({ roomId, code, selfId, firstName, nickname, avatarPat
           {micEnabled && online && <span className="wave-ring absolute inset-0 rounded-full bg-primary/40" />}
           {micEnabled ? <Mic className="relative h-5 w-5" /> : <MicOff className="relative h-5 w-5" />}
         </button>
+        <button
+          onClick={toggleCamera}
+          aria-label={cameraEnabled ? "Turn camera off" : "Turn camera on"}
+          className={`flex h-10 w-10 items-center justify-center rounded-full transition-transform active:scale-90 ${
+            cameraEnabled ? "bg-primary text-primary-foreground" : "border border-border bg-secondary text-muted-foreground"
+          }`}
+        >
+          {cameraEnabled ? <Video className="h-5 w-5" /> : <VideoOff className="h-5 w-5" />}
+        </button>
         <button onClick={() => toggle("wallpaper")} aria-label="Chat wallpaper" className="rounded-full p-2 text-muted-foreground hover:text-foreground">
           <Palette className="h-5 w-5" />
         </button>
@@ -115,10 +154,29 @@ export function RoomStage({ roomId, code, selfId, firstName, nickname, avatarPat
           )}
           {errorMessage && !audioOk && <span className="ml-2 text-destructive">{errorMessage}</span>}
         </span>
+        {permission !== "unsupported" && (
+          <button
+            onClick={() => void enableNotifications()}
+            aria-label="Online alerts"
+            className={`shrink-0 rounded-full p-1 hover:text-foreground ${permission === "granted" ? "text-success" : ""}`}
+          >
+            {permission === "granted" ? <BellRing className="h-3.5 w-3.5" /> : permission === "denied" ? <BellOff className="h-3.5 w-3.5" /> : <Bell className="h-3.5 w-3.5" />}
+          </button>
+        )}
         <button onClick={copyCode} className="flex shrink-0 items-center gap-1 font-display tracking-[0.15em] hover:text-foreground">
           {code} <Copy className="h-3 w-3" />
         </button>
       </div>
+
+      <VideoPanel
+        remoteStream={showRemote ? remoteVideoStream : null}
+        localStream={localVideoStream}
+        mirrorLocal={cameraFacing === "user"}
+        peerName={peerName}
+        onFlip={flipCamera}
+        onStopCamera={toggleCamera}
+        onHideRemote={() => setRemoteHidden(true)}
+      />
 
       {panel === "wallpaper" && (
         <div className="msg-in flex gap-2 overflow-x-auto border-b border-border bg-card px-3 py-2">

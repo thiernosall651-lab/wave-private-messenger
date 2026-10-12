@@ -7,9 +7,10 @@ import { RTC_CONFIG, loadIceServers, type ConnectionStatus } from "@/lib/webrtc-
 type SignalPayload = {
   from: string;
   to: string | null;
-  kind: "offer" | "answer" | "ice" | "bye" | "restart";
+  kind: "offer" | "answer" | "ice" | "bye" | "restart" | "camera";
   sdp?: RTCSessionDescriptionInit;
   candidate?: RTCIceCandidateInit;
+  on?: boolean;
 };
 
 type PresenceMeta = { user_id: string; first_name: string };
@@ -25,6 +26,7 @@ type Options = {
 const RECOVER_COOLDOWN_MS = 4000;
 const CONNECT_TIMEOUT_MS = 12000;
 const MAX_ATTEMPTS_BEFORE_FAILED = 6;
+const VIDEO_MAX_BITRATE = 800_000;
 
 /**
  * Real WebRTC peer-to-peer audio between exactly two people.
@@ -42,6 +44,12 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
   const [micEnabled, setMicEnabled] = useState(true);
   const [peer, setPeer] = useState<PeerInfo>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [cameraEnabled, setCameraEnabled] = useState(false);
+  const [cameraFacing, setCameraFacing] = useState<"user" | "environment">("user");
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const [localVideoStream, setLocalVideoStream] = useState<MediaStream | null>(null);
+  const [remoteVideoStream, setRemoteVideoStream] = useState<MediaStream | null>(null);
+  const [remoteCameraOn, setRemoteCameraOn] = useState(false);
 
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const channelRef = useRef<RealtimeChannel | null>(null);
@@ -57,6 +65,12 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
   const attemptsRef = useRef(0);
   const recoverRef = useRef<() => void>(() => {});
   const disconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Video is optional and fully separate from the audio stream: the video
+  // transceiver is negotiated once with the call, then the camera is switched
+  // on/off with replaceTrack (no renegotiation, audio never interrupted).
+  const localVideoTrackRef = useRef<MediaStreamTrack | null>(null);
+  const videoSenderRef = useRef<RTCRtpSender | null>(null);
+  const sendCameraStateRef = useRef<() => void>(() => {});
 
   const send = useCallback((payload: SignalPayload) => {
     channelRef.current?.send({ type: "broadcast", event: "signal", payload });
@@ -80,8 +94,44 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
       }
     }
     pendingIceRef.current = [];
+    videoSenderRef.current = null;
+    setRemoteVideoStream(null);
     if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
   }, []);
+
+  const applyVideoTrack = useCallback(async (track: MediaStreamTrack | null) => {
+    const sender = videoSenderRef.current;
+    if (!sender) return;
+    try {
+      await sender.replaceTrack(track);
+      if (track) {
+        const params = sender.getParameters();
+        if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
+        params.encodings[0]!.maxBitrate = VIDEO_MAX_BITRATE;
+        await sender.setParameters(params);
+      }
+    } catch {
+      /* video is optional: audio must keep working */
+    }
+  }, []);
+
+  const bindVideoSender = useCallback(
+    (pc: RTCPeerConnection) => {
+      const transceiver = pc.getTransceivers().find((t) => t.receiver.track.kind === "video");
+      if (!transceiver) {
+        videoSenderRef.current = null;
+        return;
+      }
+      try {
+        if (transceiver.direction !== "sendrecv") transceiver.direction = "sendrecv";
+      } catch {
+        /* noop */
+      }
+      videoSenderRef.current = transceiver.sender;
+      if (localVideoTrackRef.current) void applyVideoTrack(localVideoTrackRef.current);
+    },
+    [applyVideoTrack],
+  );
 
   const ensurePeerConnection = useCallback(
     (remoteId: string) => {
@@ -96,6 +146,17 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
         pc.addTrack(track, localStreamRef.current as MediaStream);
       });
 
+      // The offerer reserves a send/receive video slot. The answerer adopts it
+      // from the offer (see handleSignal), so both sides can use the camera.
+      if (selfId < remoteId) {
+        try {
+          pc.addTransceiver("video", { direction: "sendrecv" });
+        } catch {
+          /* video unsupported: audio-only still works */
+        }
+        bindVideoSender(pc);
+      }
+
       pc.onicecandidate = (event) => {
         if (pcRef.current !== pc) return;
         if (event.candidate) {
@@ -105,6 +166,10 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
 
       pc.ontrack = (event) => {
         if (pcRef.current !== pc) return;
+        if (event.track.kind === "video") {
+          setRemoteVideoStream(new MediaStream([event.track]));
+          return;
+        }
         const [stream] = event.streams;
         if (remoteAudioRef.current && stream) {
           remoteAudioRef.current.srcObject = stream;
@@ -126,6 +191,7 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
             setErrorMessage(null);
             setStatus("connected");
             void remoteAudioRef.current?.play().catch(() => {});
+            sendCameraStateRef.current();
             break;
           case "connecting":
             setStatus(attemptsRef.current > 0 ? "reconnecting" : "connecting");
@@ -150,7 +216,7 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
 
       return pc;
     },
-    [selfId, send],
+    [selfId, send, bindVideoSender],
   );
 
   const makeOffer = useCallback(
@@ -194,6 +260,12 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
     }
   };
 
+  sendCameraStateRef.current = () => {
+    const remote = peerIdRef.current;
+    if (!remote || teardownRef.current) return;
+    send({ from: selfId, to: remote, kind: "camera", on: !!localVideoTrackRef.current });
+  };
+
   const flushIce = useCallback(async () => {
     const pc = pcRef.current;
     if (!pc || !pc.remoteDescription) return;
@@ -217,7 +289,13 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
         closePeerConnection();
         peerIdRef.current = null;
         setPeer(null);
+        setRemoteCameraOn(false);
         setStatus("waiting");
+        return;
+      }
+
+      if (payload.kind === "camera") {
+        setRemoteCameraOn(!!payload.on);
         return;
       }
 
@@ -256,6 +334,7 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
         try {
           await pc.setRemoteDescription(payload.sdp);
           await flushIce();
+          bindVideoSender(pc);
           const answer = await pc.createAnswer();
           if (pcRef.current !== pc) return;
           await pc.setLocalDescription(answer);
@@ -289,7 +368,7 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
         }
       }
     },
-    [closePeerConnection, ensurePeerConnection, flushIce, selfId, send],
+    [closePeerConnection, ensurePeerConnection, bindVideoSender, flushIce, selfId, send],
   );
 
   useEffect(() => {
@@ -345,6 +424,7 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
         setPeer(other);
 
         if (!other) {
+          setRemoteCameraOn(false);
           if (peerIdRef.current) {
             closePeerConnection();
             peerIdRef.current = null;
@@ -440,6 +520,8 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
       closePeerConnection();
       localStreamRef.current?.getTracks().forEach((t) => t.stop());
       localStreamRef.current = null;
+      localVideoTrackRef.current?.stop();
+      localVideoTrackRef.current = null;
       peerIdRef.current = null;
     };
   }, [roomId, selfId, handleSignal, makeOffer, closePeerConnection, ensurePeerConnection]);
@@ -460,5 +542,90 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
     setMicEnabled(next);
   }, []);
 
-  return { status, micEnabled, toggleMic, peer, errorMessage, remoteAudioRef };
+  const stopCamera = useCallback(() => {
+    const track = localVideoTrackRef.current;
+    localVideoTrackRef.current = null;
+    if (track) {
+      track.onended = null;
+      track.stop();
+    }
+    setLocalVideoStream(null);
+    setCameraEnabled(false);
+    void applyVideoTrack(null);
+    sendCameraStateRef.current();
+  }, [applyVideoTrack]);
+
+  const startCamera = useCallback(
+    async (facing: "user" | "environment") => {
+      setCameraError(null);
+      // Release the previous camera first: many phones cannot open two at once.
+      const previous = localVideoTrackRef.current;
+      if (previous) {
+        previous.onended = null;
+        previous.stop();
+        localVideoTrackRef.current = null;
+      }
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: {
+            facingMode: { ideal: facing },
+            width: { ideal: 640 },
+            height: { ideal: 480 },
+            frameRate: { ideal: 24, max: 30 },
+          },
+        });
+      } catch {
+        setLocalVideoStream(null);
+        setCameraEnabled(false);
+        void applyVideoTrack(null);
+        sendCameraStateRef.current();
+        setCameraError("Camera access was blocked, or no camera was found.");
+        return;
+      }
+      const track = stream.getVideoTracks()[0];
+      if (!track || teardownRef.current) {
+        stream.getTracks().forEach((t) => t.stop());
+        return;
+      }
+      localVideoTrackRef.current = track;
+      track.onended = () => {
+        if (localVideoTrackRef.current === track) stopCamera();
+      };
+      setLocalVideoStream(new MediaStream([track]));
+      setCameraFacing(facing);
+      setCameraEnabled(true);
+      await applyVideoTrack(track);
+      sendCameraStateRef.current();
+    },
+    [applyVideoTrack, stopCamera],
+  );
+
+  const toggleCamera = useCallback(() => {
+    if (localVideoTrackRef.current) stopCamera();
+    else void startCamera(cameraFacing);
+  }, [cameraFacing, startCamera, stopCamera]);
+
+  const flipCamera = useCallback(() => {
+    if (!localVideoTrackRef.current) return;
+    void startCamera(cameraFacing === "user" ? "environment" : "user");
+  }, [cameraFacing, startCamera]);
+
+  return {
+    status,
+    micEnabled,
+    toggleMic,
+    peer,
+    errorMessage,
+    remoteAudioRef,
+    cameraEnabled,
+    cameraFacing,
+    cameraError,
+    toggleCamera,
+    flipCamera,
+    localVideoStream,
+    remoteVideoStream,
+    remoteCameraOn,
+  };
 }

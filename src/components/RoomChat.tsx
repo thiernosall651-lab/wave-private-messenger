@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from "react";
 import { Camera, Check, CheckCheck, Eye, EyeOff, Image as ImageIcon, LoaderCircle, Mic, Plus, Reply, Send, Square, Trash2, Video, X } from "lucide-react";
 import { toast } from "sonner";
 
@@ -18,6 +18,40 @@ type Props = {
 };
 
 const timeFmt = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
+
+/** Turn plain URLs in chat text into safe, clickable links. */
+function renderMessageWithLinks(message: string, own: boolean): ReactNode[] {
+  const parts: ReactNode[] = [];
+  let lastIndex = 0;
+  const urlPattern = /(?<![\w@.-])(?:https?:\/\/|www\.)[^\s<>"']+|(?<![\w@.-])(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/[^\s<>"']*)?/gi;
+
+  for (const match of message.matchAll(urlPattern)) {
+    const full = match[0];
+    const trailing = full.match(/[.,!?;:)\]}]+$/)?.[0] ?? "";
+    const url = full.slice(0, full.length - trailing.length);
+    if (!url) continue;
+
+    const start = match.index ?? 0;
+    if (start > lastIndex) parts.push(message.slice(lastIndex, start));
+    const href = /^https?:\/\//i.test(url) ? url : `https://${url}`;
+    parts.push(
+      <a
+        key={`url-${start}`}
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className={`break-all font-medium underline underline-offset-2 ${own ? "text-blue-800 hover:text-blue-950" : "text-blue-400 hover:text-blue-300"}`}
+      >
+        {url}
+      </a>,
+    );
+    if (trailing) parts.push(trailing);
+    lastIndex = start + full.length;
+  }
+
+  if (lastIndex < message.length) parts.push(message.slice(lastIndex));
+  return parts.length ? parts : [message];
+}
 type Pending = { kind: MediaKind; file: Blob; url: string };
 type OnceViewer = { kind: "text" | MediaKind; content: string; url: string | null };
 
@@ -576,7 +610,7 @@ function Bubble({
               {m.kind === "video" && m.media_path && <VideoMessage path={m.media_path} />}
               {m.kind === "audio" && m.media_path && <AudioMessage path={m.media_path} own={own} />}
               {m.message && (
-                <p className={`max-w-full whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-sm ${media ? "px-2 py-1.5" : "px-3 py-2"}`}>{m.message}</p>
+                <p className={`max-w-full whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-sm ${media ? "px-2 py-1.5" : "px-3 py-2"}`}>{renderMessageWithLinks(m.message, own)}</p>
               )}
             </>
           )}

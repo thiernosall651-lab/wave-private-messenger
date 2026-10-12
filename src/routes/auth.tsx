@@ -1,9 +1,10 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Eye, EyeOff } from "lucide-react";
 
 import { supabase } from "@/integrations/supabase/client";
+import { consumeRoomDestination } from "@/lib/post-login";
 
 export const Route = createFileRoute("/auth")({
   head: () => ({
@@ -27,15 +28,25 @@ function AuthPage() {
   const [checkEmail, setCheckEmail] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
+  const navigatedRef = useRef(false);
+  // After login: go to the room from the invite link if there was one, else the dashboard.
+  const goNext = useCallback(() => {
+    if (navigatedRef.current) return;
+    navigatedRef.current = true;
+    const code = consumeRoomDestination();
+    if (code) void navigate({ to: "/room/$code", params: { code }, replace: true });
+    else void navigate({ to: "/dashboard", replace: true });
+  }, [navigate]);
+
   useEffect(() => {
     const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (session?.user) void navigate({ to: "/dashboard", replace: true });
+      if (session?.user) goNext();
     });
     void supabase.auth.getUser().then(({ data }) => {
-      if (data.user) void navigate({ to: "/dashboard", replace: true });
+      if (data.user) goNext();
     });
     return () => sub.subscription.unsubscribe();
-  }, [navigate]);
+  }, [goNext]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();

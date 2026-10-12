@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { ArrowLeft, Bell, BellOff, BellRing, Copy, Mic, MicOff, Palette, UserRound, Video, VideoOff } from "lucide-react";
+import { ArrowLeft, Bell, BellOff, BellRing, Copy, Mic, MicOff, Palette, Share2, UserRound, Video, VideoOff } from "lucide-react";
 
 import { useWaveAudio } from "@/hooks/useWaveAudio";
 import { useRoomPeer } from "@/hooks/useRoomPeer";
@@ -95,6 +95,24 @@ export function RoomStage({ roomId, code, selfId, firstName, nickname, avatarPat
     }
   };
 
+  const shareLink = async () => {
+    const url = `${window.location.origin}/room/${code}`;
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: "WAVE", text: "Join me on WAVE", url });
+        return;
+      }
+    } catch (err) {
+      if ((err as DOMException)?.name === "AbortError") return;
+    }
+    try {
+      await navigator.clipboard.writeText(url);
+      toast.success("Room link copied");
+    } catch {
+      toast.error("Could not copy — the link is " + url);
+    }
+  };
+
   const handleLeave = async () => {
     setLeaving(true);
     await onLeave();
@@ -163,6 +181,9 @@ export function RoomStage({ roomId, code, selfId, firstName, nickname, avatarPat
             {permission === "granted" ? <BellRing className="h-3.5 w-3.5" /> : permission === "denied" ? <BellOff className="h-3.5 w-3.5" /> : <Bell className="h-3.5 w-3.5" />}
           </button>
         )}
+        <button onClick={() => void shareLink()} aria-label="Share room link" className="shrink-0 rounded-full p-1 hover:text-foreground">
+          <Share2 className="h-3.5 w-3.5" />
+        </button>
         <button onClick={copyCode} className="flex shrink-0 items-center gap-1 font-display tracking-[0.15em] hover:text-foreground">
           {code} <Copy className="h-3 w-3" />
         </button>

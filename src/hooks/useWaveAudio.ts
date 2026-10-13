@@ -529,10 +529,13 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
         const stats = await pc.getStats();
         let bytes = 0;
         stats.forEach((r) => {
-          const s = r as { type: string; kind?: string; mediaType?: string; bytesReceived?: number };
+          const s = r as { type: string; kind?: string; mediaType?: string; bytesReceived?: number; state?: string };
           if (s.type === "inbound-rtp" && (s.kind ?? s.mediaType) === "audio") bytes += s.bytesReceived ?? 0;
+          // Also count traffic on the working network path (it includes RTCP). A friend who
+          // muted their microphone may send almost no audio packets, but the path itself keeps
+          // carrying data — so a muted friend must never look like a dead connection.
+          if (s.type === "candidate-pair" && s.state === "succeeded") bytes += s.bytesReceived ?? 0;
         });
-        // A muted peer still sends silent packets, so stalled bytes = broken audio.
         if (lastBytes >= 0 && bytes <= lastBytes) stalls += 1;
         else stalls = 0;
         lastBytes = bytes;

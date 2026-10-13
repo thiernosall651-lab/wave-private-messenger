@@ -383,6 +383,8 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
     teardownRef.current = false;
     let cancelled = false;
     let subscribedOnce = false;
+    let signalingRetry: ReturnType<typeof setTimeout> | null = null;
+    let signalingRetryAttempt = 0;
 
     const start = async () => {
       setStatus("requesting-mic");
@@ -407,68 +409,103 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
       localStreamRef.current = stream;
       setStatus("waiting");
 
-      const channel = supabase.channel(`wave-room:${roomId}`, {
-        config: {
-          presence: { key: selfId },
-          broadcast: { self: false, ack: false },
-        },
-      });
-      channelRef.current = channel;
+      const connectSignaling = () => {
+        if (cancelled) return;
+        const channel = supabase.channel(`wave-room:${roomId}`, {
+          config: {
+            presence: { key: selfId },
+            broadcast: { self: false, ack: false },
+          },
+        });
+        channelRef.current = channel;
 
-      channel.on("broadcast", { event: "signal" }, ({ payload }) => {
-        void handleSignal(payload as SignalPayload);
-      });
-
-      channel.on("presence", { event: "sync" }, () => {
-        const state = channel.presenceState<PresenceMeta>();
-        const others = Object.entries(state)
-          .filter(([key]) => key !== selfId)
-          .map(([key, metas]) => ({
-            userId: key,
-            firstName: metas[0]?.first_name ?? "Friend",
-          }));
-
-        const other = others[0] ?? null;
-        setPeer(other);
-
-        if (!other) {
-          setRemoteCameraOn(false);
-          if (peerIdRef.current) {
-            closePeerConnection();
-            peerIdRef.current = null;
-            attemptsRef.current = 0;
-            setStatus("waiting");
-          }
-          return;
-        }
-
-        if (peerIdRef.current !== other.userId) {
-          closePeerConnection();
-          peerIdRef.current = other.userId;
-          attemptsRef.current = 0;
-          setStatus("connecting");
-          if (selfId < other.userId) {
-            void makeOffer(other.userId);
-          } else {
-            ensurePeerConnection(other.userId);
-          }
-        }
-      });
-
-      channel.subscribe(async (state) => {
-        if (state === "SUBSCRIBED") {
-          setErrorMessage(null);
-          await channel.track({ user_id: selfId, first_name: firstNameRef.current } satisfies PresenceMeta);
-          // Signaling came back after a drop: re-check audio, rebuild if not connected.
-          if (subscribedOnce && peerIdRef.current && pcRef.current?.connectionState !== "connected") {
-            lastRecoverRef.current = 0;
-            recoverRef.current();
-          }
-          subscribedOnce = true;
-        } else if (state === "CHANNEL_ERROR" || state === "TIMED_OUT") {
+        const scheduleReconnect = () => {
+          if (cancelled || channelRef.current !== channel || signalingRetry) return;
           setErrorMessage("Lost connection to the signaling service. Reconnecting...");
-        }
-      });
+          const delay = Math.min(15000, 1500 * 2 ** signalingRetryAttempt);
+          signalingRetryAttempt = Math.min(signalingRetryAttempt + 1, 4);
+          signalingRetry = setTimeout(() => {
+            signalingRetry = null;
+            if (cancelled || channelRef.current !== channel) return;
+            channelRef.current = null;
+            void supabase.removeChannel(channel).finally(() => {
+              if (!cancelled) connectSignaling();
+            });
+          }, delay);
+        };
+
+        channel.on("broadcast", { event: "signal" }, ({ payload }) => {
+          if (cancelled || channelRef.current !== channel) return;
+          void handleSignal(payload as SignalPayload);
+        });
+
+        channel.on("presence", { event: "sync" }, () => {
+          if (cancelled || channelRef.current !== channel) return;
+          const state = channel.presenceState<PresenceMeta>();
+          const others = Object.entries(state)
+            .filter(([key]) => key !== selfId)
+            .map(([key, metas]) => ({
+              userId: key,
+              firstName: metas[0]?.first_name ?? "Friend",
+            }));
+
+          const other = others[0] ?? null;
+          setPeer(other);
+
+          if (!other) {
+            setRemoteCameraOn(false);
+            if (peerIdRef.current) {
+              closePeerConnection();
+              peerIdRef.current = null;
+              attemptsRef.current = 0;
+              setStatus("waiting");
+            }
+            return;
+          }
+
+          if (peerIdRef.current !== other.userId) {
+            closePeerConnection();
+            peerIdRef.current = other.userId;
+            attemptsRef.current = 0;
+            setStatus("connecting");
+            if (selfId < other.userId) {
+              void makeOffer(other.userId);
+            } else {
+              ensurePeerConnection(other.userId);
+            }
+          }
+        });
+
+        channel.subscribe(async (state) => {
+          if (cancelled || channelRef.current !== channel) return;
+          if (state === "SUBSCRIBED") {
+            if (signalingRetry) {
+              clearTimeout(signalingRetry);
+              signalingRetry = null;
+            }
+            signalingRetryAttempt = 0;
+            setErrorMessage(null);
+            const { error: trackError } = await channel.track({
+              user_id: selfId,
+              first_name: firstNameRef.current,
+            } satisfies PresenceMeta);
+            if (trackError) {
+              scheduleReconnect();
+              return;
+            }
+            // Signaling came back after a drop: re-check audio, rebuild if not connected.
+            if (subscribedOnce && peerIdRef.current && pcRef.current?.connectionState !== "connected") {
+              lastRecoverRef.current = 0;
+              recoverRef.current();
+            }
+            subscribedOnce = true;
+          } else if (state === "CHANNEL_ERROR" || state === "TIMED_OUT" || state === "CLOSED") {
+            scheduleReconnect();
+          }
+        });
+      };
+
+      connectSignaling();
     };
 
     void start();
@@ -509,6 +546,10 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
     return () => {
       cancelled = true;
       teardownRef.current = true;
+      if (signalingRetry) {
+        clearTimeout(signalingRetry);
+        signalingRetry = null;
+      }
       clearInterval(watchdog);
       if (channelRef.current) {
         const ch = channelRef.current;

@@ -205,11 +205,18 @@ export function useRoomChat(roomId: string) {
     window.addEventListener("online", resync);
     window.addEventListener("focus", resync);
 
+    // Safety net for browsers where realtime events get dropped or suspended
+    // while the tab or phone was idle. Realtime remains the primary path.
+    const recoveryPoll = window.setInterval(() => {
+      if (active && document.visibilityState === "visible") void syncLatest();
+    }, 5000);
+
     return () => {
       active = false;
       channelRef.current = null;
       if (retry) clearTimeout(retry);
       if (typingTimer.current) clearTimeout(typingTimer.current);
+      window.clearInterval(recoveryPoll);
       document.removeEventListener("visibilitychange", resync);
       window.removeEventListener("online", resync);
       window.removeEventListener("focus", resync);

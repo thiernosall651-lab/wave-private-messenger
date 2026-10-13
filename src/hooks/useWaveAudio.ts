@@ -170,13 +170,21 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
           setRemoteVideoStream(new MediaStream([event.track]));
           return;
         }
-        const [stream] = event.streams;
-        if (remoteAudioRef.current && stream) {
-          remoteAudioRef.current.srcObject = stream;
-          void remoteAudioRef.current.play().catch(() => {
-            /* autoplay may need a user gesture; the UI already required one */
+
+        // Some browsers emit an audio track without event.streams. Attach the
+        // track explicitly so the remote audio still reaches the audio element.
+        const stream = event.streams[0] ?? new MediaStream([event.track]);
+        const audio = remoteAudioRef.current;
+        if (!audio) return;
+        if (audio.srcObject !== stream) audio.srcObject = stream;
+
+        const tryPlay = () => {
+          if (audio.srcObject === stream) void audio.play().catch(() => {
+            // Retry from the microphone button's user gesture if autoplay is blocked.
           });
-        }
+        };
+        event.track.onunmute = tryPlay;
+        tryPlay();
       };
 
       pc.onconnectionstatechange = () => {
@@ -540,6 +548,11 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
       t.enabled = next;
     });
     setMicEnabled(next);
+
+    // Tapping this control is a user gesture, which can unlock audio playback
+    // on browsers that reject autoplay during call setup.
+    const remoteAudio = remoteAudioRef.current;
+    if (remoteAudio?.srcObject) void remoteAudio.play().catch(() => {});
   }, []);
 
   const stopCamera = useCallback(() => {

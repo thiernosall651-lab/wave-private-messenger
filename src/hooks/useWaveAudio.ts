@@ -196,8 +196,12 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
               disconnectTimerRef.current = null;
             }
             attemptsRef.current = 0;
-            setErrorMessage(null);
-            setStatus("connected");
+            if (localStreamRef.current) {
+              setErrorMessage(null);
+              setStatus("connected");
+            } else {
+              setStatus("mic-denied");
+            }
             void remoteAudioRef.current?.play().catch(() => {});
             sendCameraStateRef.current();
             break;
@@ -385,10 +389,11 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
     let subscribedOnce = false;
     let signalingRetry: ReturnType<typeof setTimeout> | null = null;
     let signalingRetryAttempt = 0;
+    let presencePoll: ReturnType<typeof setInterval> | null = null;
 
     const start = async () => {
       setStatus("requesting-mic");
-      let stream: MediaStream;
+      let stream: MediaStream | null = null;
       try {
         stream = await navigator.mediaDevices.getUserMedia({
           audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
@@ -396,18 +401,21 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
         });
       } catch {
         if (!cancelled) {
+          // Presence and chat must keep working even when the microphone is denied.
+          // The room UI should not stay stuck on "Waiting for your friend" for that reason.
           setStatus("mic-denied");
-          setErrorMessage("WAVE needs microphone access to connect you.");
+          setMicEnabled(false);
+          setErrorMessage("WAVE needs microphone access to send your voice.");
         }
-        return;
       }
       await loadIceServers();
       if (cancelled) {
-        stream.getTracks().forEach((t) => t.stop());
+        stream?.getTracks().forEach((t) => t.stop());
         return;
       }
       localStreamRef.current = stream;
-      setStatus("waiting");
+      if (stream) setStatus("waiting");
+      else setStatus("mic-denied");
 
       const connectSignaling = () => {
         if (cancelled) return;
@@ -439,17 +447,22 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
           void handleSignal(payload as SignalPayload);
         });
 
-        channel.on("presence", { event: "sync" }, () => {
+        const syncPresence = () => {
           if (cancelled || channelRef.current !== channel) return;
           const state = channel.presenceState<PresenceMeta>();
-          const others = Object.entries(state)
-            .filter(([key]) => key !== selfId)
-            .map(([key, metas]) => ({
-              userId: key,
-              firstName: metas[0]?.first_name ?? "Friend",
-            }));
-
-          const other = others[0] ?? null;
+          // Use the user id in presence metadata as the stable identity; do not
+          // rely exclusively on the outer presence key when detecting the peer.
+          const seen = new Map<string, { userId: string; firstName: string }>();
+          for (const metas of Object.values(state)) {
+            const meta = metas.find((item) => item.user_id && item.user_id !== selfId);
+            if (meta?.user_id) {
+              seen.set(meta.user_id, {
+                userId: meta.user_id,
+                firstName: meta.first_name || "Friend",
+              });
+            }
+          }
+          const other = [...seen.values()][0] ?? null;
           setPeer(other);
 
           if (!other) {
@@ -458,7 +471,7 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
               closePeerConnection();
               peerIdRef.current = null;
               attemptsRef.current = 0;
-              setStatus("waiting");
+              setStatus(localStreamRef.current ? "waiting" : "mic-denied");
             }
             return;
           }
@@ -467,14 +480,21 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
             closePeerConnection();
             peerIdRef.current = other.userId;
             attemptsRef.current = 0;
-            setStatus("connecting");
+            if (localStreamRef.current) setStatus("connecting");
             if (selfId < other.userId) {
               void makeOffer(other.userId);
             } else {
               ensurePeerConnection(other.userId);
             }
           }
-        });
+        };
+
+        channel.on("presence", { event: "sync" }, syncPresence);
+
+        // Supabase presence sync notifications can be missed when a mobile tab
+        // resumes from sleep. Re-read current presence after tracking and briefly poll.
+        if (presencePoll) clearInterval(presencePoll);
+        presencePoll = setInterval(syncPresence, 2000);
 
         channel.subscribe(async (state, err) => {
           if (cancelled || channelRef.current !== channel) return;
@@ -493,7 +513,9 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
               scheduleReconnect();
               return;
             }
-            setErrorMessage(null);
+            // Refresh once tracking has completed in case the initial sync arrived early.
+            setTimeout(syncPresence, 0);
+            if (localStreamRef.current) setErrorMessage(null);
             // Signaling came back after a drop: re-check audio, rebuild if not connected.
             if (subscribedOnce && peerIdRef.current && pcRef.current?.connectionState !== "connected") {
               lastRecoverRef.current = 0;
@@ -555,6 +577,10 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
       if (signalingRetry) {
         clearTimeout(signalingRetry);
         signalingRetry = null;
+      }
+      if (presencePoll) {
+        clearInterval(presencePoll);
+        presencePoll = null;
       }
       clearInterval(watchdog);
       if (channelRef.current) {

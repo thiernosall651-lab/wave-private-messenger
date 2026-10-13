@@ -476,7 +476,7 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
           }
         });
 
-        channel.subscribe(async (state) => {
+        channel.subscribe(async (state, err) => {
           if (cancelled || channelRef.current !== channel) return;
           if (state === "SUBSCRIBED") {
             if (signalingRetry) {
@@ -484,15 +484,16 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
               signalingRetry = null;
             }
             signalingRetryAttempt = 0;
-            setErrorMessage(null);
-            const { error: trackError } = await channel.track({
+            const trackStatus = await channel.track({
               user_id: selfId,
               first_name: firstNameRef.current,
             } satisfies PresenceMeta);
-            if (trackError) {
+            if (trackStatus !== "ok") {
+              console.error("[WAVE signaling] Presence track failed:", trackStatus);
               scheduleReconnect();
               return;
             }
+            setErrorMessage(null);
             // Signaling came back after a drop: re-check audio, rebuild if not connected.
             if (subscribedOnce && peerIdRef.current && pcRef.current?.connectionState !== "connected") {
               lastRecoverRef.current = 0;
@@ -500,6 +501,8 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
             }
             subscribedOnce = true;
           } else if (state === "CHANNEL_ERROR" || state === "TIMED_OUT" || state === "CLOSED") {
+            console.error("[WAVE signaling] Subscription state:", state, err?.message ?? err ?? "No error details");
+            setErrorMessage(`Lost connection to signaling (${state}). Reconnecting...`);
             scheduleReconnect();
           }
         });

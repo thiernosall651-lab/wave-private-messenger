@@ -83,6 +83,8 @@ export type Database = {
         Update: {
           created_at?: string
           delivered_at?: string | null
+          deleted_at?: string | null
+          deleted_for_everyone?: boolean
           id?: string
           kind?: string
           media_mime?: string | null

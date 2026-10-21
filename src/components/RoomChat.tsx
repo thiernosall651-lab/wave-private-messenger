@@ -305,6 +305,7 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
             key={m.id}
             m={m}
             own={m.user_id === selfId}
+            canDelete={featuresAvailable}
             firstInGroup={messages[i - 1]?.user_id !== m.user_id}
             lastInGroup={messages[i + 1]?.user_id !== m.user_id}
             name={m.user_id === selfId ? selfName : peerName ?? "Friend"}
@@ -535,6 +536,7 @@ function Bubble({
   onOpenOnce,
   onReact,
   onDelete,
+  canDelete,
 }: {
   m: ChatMessage;
   own: boolean;
@@ -554,6 +556,7 @@ function Bubble({
   onOpenOnce: (message: ChatMessage) => void;
   onReact: (messageId: string, emoji: string) => void;
   onDelete: () => void;
+  canDelete: boolean;
 }) {
   const press = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cancelPress = () => {
@@ -651,7 +654,7 @@ function Bubble({
             <button onClick={onReply} className="flex items-center gap-1 rounded-full px-3 py-1.5 hover:bg-secondary">
               <Reply className="h-3.5 w-3.5 text-primary" /> Reply
             </button>
-            {own && <button onClick={onDelete} className="flex items-center gap-1 rounded-full px-3 py-1.5 text-destructive hover:bg-destructive/10">
+            {own && canDelete && <button onClick={onDelete} className="flex items-center gap-1 rounded-full px-3 py-1.5 text-destructive hover:bg-destructive/10">
               <Trash2 className="h-3.5 w-3.5" /> Delete for everyone
             </button>}
             <button onClick={() => onActions(false)} aria-label="Close" className="rounded-full p-1.5 hover:bg-secondary">

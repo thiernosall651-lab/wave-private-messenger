@@ -63,6 +63,7 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
     uploadProgress,
     openViewOnce,
     toggleReaction,
+    deleteForEveryone,
     loading,
     loadError,
     hasMore,
@@ -304,6 +305,7 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
             key={m.id}
             m={m}
             own={m.user_id === selfId}
+            canDelete={featuresAvailable}
             firstInGroup={messages[i - 1]?.user_id !== m.user_id}
             lastInGroup={messages[i + 1]?.user_id !== m.user_id}
             name={m.user_id === selfId ? selfName : peerName ?? "Friend"}
@@ -322,6 +324,15 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
               setActionsFor(null);
             }}
             onReply={() => startReply(m)}
+            onDelete={() => {
+              setActionsFor(null);
+              if (!window.confirm("Delete this message for everyone? This cannot be undone.")) return;
+              void deleteForEveryone(m.id).then(() => toast.success("Message deleted for everyone")).catch((error) => {
+                const message = error instanceof Error ? error.message : "Could not delete this message.";
+                setSendError(message);
+                toast.error(message);
+              });
+            }}
           />
         ))}
         {peerTyping && (
@@ -524,6 +535,8 @@ function Bubble({
   selfId,
   onOpenOnce,
   onReact,
+  onDelete,
+  canDelete,
 }: {
   m: ChatMessage;
   own: boolean;
@@ -542,6 +555,8 @@ function Bubble({
   selfId: string;
   onOpenOnce: (message: ChatMessage) => void;
   onReact: (messageId: string, emoji: string) => void;
+  onDelete: () => void;
+  canDelete: boolean;
 }) {
   const press = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cancelPress = () => {
@@ -574,6 +589,10 @@ function Bubble({
       <div className={`flex min-w-0 max-w-full flex-col ${own ? "items-end" : "items-start"}`}>
         {!own && firstInGroup && <span className="mb-0.5 ml-1 text-[11px] font-medium text-primary">{name}</span>}
         <div className={`min-w-0 max-w-full overflow-hidden ${shape} ${media && m.kind !== "audio" ? "p-1" : ""}`}>
+          {m.deleted_for_everyone ? (
+            <p className="px-3 py-2 text-sm italic opacity-75">{own ? "You deleted this message" : "This message was deleted"}</p>
+          ) : (
+          <>
           {m.reply_to_message_id && (
             <button
               type="button"
@@ -614,8 +633,10 @@ function Bubble({
               )}
             </>
           )}
+          </>
+          )}
         </div>
-        {Object.entries(m.reactions ?? {}).filter(([, users]) => Array.isArray(users) && users.length > 0).length > 0 && (
+        {!m.deleted_for_everyone && Object.entries(m.reactions ?? {}).filter(([, users]) => Array.isArray(users) && users.length > 0).length > 0 && (
           <div className="mt-1 flex flex-wrap gap-1">
             {Object.entries(m.reactions ?? {}).filter(([, users]) => Array.isArray(users) && users.length > 0).map(([emoji, users]) => (
               <button key={emoji} type="button" onClick={() => onReact(m.id, emoji)} aria-label={emoji + " reaction, " + users.length + " people"}
@@ -625,7 +646,7 @@ function Bubble({
             ))}
           </div>
         )}
-        {actionsOpen && (
+        {actionsOpen && !m.deleted_for_everyone && (
           <div className="msg-in mt-1 flex max-w-full flex-wrap items-center gap-1 rounded-full border border-border bg-popover p-1 text-xs shadow-lg">
             {["❤️", "😂", "😮", "😢", "👍", "🙏", "🔥", "💯"].map((emoji) => (
               <button key={emoji} type="button" onClick={() => onReact(m.id, emoji)} aria-label={"React with " + emoji} className="rounded-full px-1.5 py-1.5 text-base hover:bg-secondary">{emoji}</button>
@@ -633,6 +654,9 @@ function Bubble({
             <button onClick={onReply} className="flex items-center gap-1 rounded-full px-3 py-1.5 hover:bg-secondary">
               <Reply className="h-3.5 w-3.5 text-primary" /> Reply
             </button>
+            {own && canDelete && <button onClick={onDelete} className="flex items-center gap-1 rounded-full px-3 py-1.5 text-destructive hover:bg-destructive/10">
+              <Trash2 className="h-3.5 w-3.5" /> Delete for everyone
+            </button>}
             <button onClick={() => onActions(false)} aria-label="Close" className="rounded-full p-1.5 hover:bg-secondary">
               <X className="h-3.5 w-3.5" />
             </button>

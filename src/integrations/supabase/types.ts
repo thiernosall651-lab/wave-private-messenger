@@ -45,6 +45,8 @@ export type Database = {
         Row: {
           created_at: string
           delivered_at: string | null
+          deleted_at: string | null
+          deleted_for_everyone: boolean
           id: string
           kind: string
           media_mime: string | null
@@ -62,6 +64,8 @@ export type Database = {
         Insert: {
           created_at?: string
           delivered_at?: string | null
+          deleted_at?: string | null
+          deleted_for_everyone?: boolean
           id?: string
           kind?: string
           media_mime?: string | null
@@ -79,6 +83,8 @@ export type Database = {
         Update: {
           created_at?: string
           delivered_at?: string | null
+          deleted_at?: string | null
+          deleted_for_everyone?: boolean
           id?: string
           kind?: string
           media_mime?: string | null
@@ -171,6 +177,7 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      delete_room_message_for_everyone: { Args: { p_message_id: string }; Returns: Json }
       create_room: { Args: never; Returns: Json }
       get_room_state: { Args: { p_room_id: string }; Returns: Json }
       join_room: { Args: { p_code: string }; Returns: Json }

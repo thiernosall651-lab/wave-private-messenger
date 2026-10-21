@@ -23,10 +23,12 @@ export type ChatMessage = {
   viewed_at: string | null;
   viewed_by: string | null;
   reactions: Record<string, string[]>;
+  deleted_for_everyone: boolean;
+  deleted_at: string | null;
 };
 
 const LEGACY_FIELDS = "id, room_id, user_id, message, created_at, kind, media_path, media_mime, delivered_at, read_at, reply_to_message_id";
-const FIELDS = LEGACY_FIELDS + ", view_once, viewed_at, viewed_by, reactions";
+const FIELDS = LEGACY_FIELDS + ", view_once, viewed_at, viewed_by, reactions, deleted_for_everyone, deleted_at";
 const ALLOWED_REACTIONS = ["❤️", "😂", "😮", "😢", "👍", "🙏", "🔥", "💯"] as const;
 type ViewOncePayload = { already_opened?: boolean; kind: MediaKind | "text"; content: string | null; media_path: string | null; media_mime: string | null };
 
@@ -39,11 +41,13 @@ function normalizeMessage(message: Partial<ChatMessage> & Record<string, unknown
     reactions: message.reactions && typeof message.reactions === "object" && !Array.isArray(message.reactions)
       ? message.reactions as Record<string, string[]>
       : {},
+    deleted_for_everyone: message.deleted_for_everyone === true,
+    deleted_at: typeof message.deleted_at === "string" ? message.deleted_at : null,
   };
 }
 
 function isFeatureSchemaError(message: string) {
-  return /view_once|viewed_at|viewed_by|reactions/i.test(message) && /column|schema cache|does not exist|could not find|missing/i.test(message);
+  return /view_once|viewed_at|viewed_by|reactions|deleted_for_everyone|deleted_at/i.test(message) && /column|schema cache|does not exist|could not find|missing/i.test(message);
 }
 
 const ts = (m: ChatMessage) => new Date(m.created_at).getTime();
@@ -401,6 +405,37 @@ export function useRoomChat(roomId: string) {
     }
   }, [featuresAvailable]);
 
+  /** Permanently tombstone an authored message for every participant in the room. */
+  const deleteForEveryone = useCallback(async (messageId: string) => {
+    if (!featuresAvailable) throw new Error("Message deletion needs the WAVE database update first.");
+    const target = messagesRef.current.find((m) => m.id === messageId);
+    if (!target) throw new Error("Message not found. Refresh the conversation and try again.");
+    const { data: authData } = await supabase.auth.getUser();
+    if (target.user_id !== authData.user?.id) throw new Error("You can only delete your own messages for everyone.");
+    if (target.deleted_for_everyone) return;
+
+    const { data, error } = await supabase.rpc("delete_room_message_for_everyone", { p_message_id: messageId });
+    if (error) throw new Error(error.message.includes("NOT_MESSAGE_OWNER")
+      ? "You can only delete your own messages for everyone."
+      : "Could not delete this message for everyone. Please try again.");
+
+    const deletedAt = new Date().toISOString();
+    const tombstone = (m: ChatMessage): ChatMessage => ({
+      ...m, message: "This message was deleted", kind: "text", media_path: null, media_mime: null,
+      view_once: false, viewed_at: null, viewed_by: null, reactions: {}, deleted_for_everyone: true, deleted_at: deletedAt,
+    });
+    setMessages((prev) => prev.map((m) => m.id === messageId ? tombstone(m) : m));
+    setRefs((prev) => Object.fromEntries(Object.entries(prev).map(([id, m]) => [id, m?.id === messageId ? tombstone(m) : m])));
+
+    const result = data as { media_path?: string | null; view_once?: boolean } | null;
+    const mediaPath = result?.media_path ?? target.media_path;
+    const bucket = result?.view_once || target.view_once ? "chat-view-once" : "chat-media";
+    if (mediaPath) {
+      const { error: storageError } = await supabase.storage.from(bucket).remove([mediaPath]);
+      if (storageError) console.warn("Message deleted, but media cleanup needs retry:", storageError.message);
+    }
+  }, [featuresAvailable]);
+
   /** Mark the partner's messages delivered, and read when the conversation is actually visible. */
   const markSeen = useCallback(
     async (read: boolean) => {
@@ -426,6 +461,7 @@ export function useRoomChat(roomId: string) {
     sendMedia,
     openViewOnce,
     toggleReaction,
+    deleteForEveryone,
     typingUser,
     notifyTyping,
     markSeen,

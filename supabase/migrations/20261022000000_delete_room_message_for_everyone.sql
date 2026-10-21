@@ -3,6 +3,14 @@ ALTER TABLE public.room_messages
   ADD COLUMN IF NOT EXISTS deleted_for_everyone boolean NOT NULL DEFAULT false,
   ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
 
+-- Permit owners to remove their own uploaded chat media after the message tombstone is saved.
+DROP POLICY IF EXISTS "chat media owner delete" ON storage.objects;
+CREATE POLICY "chat media owner delete" ON storage.objects FOR DELETE TO authenticated USING (
+  bucket_id = 'chat-media'
+  AND (storage.foldername(name))[2] = auth.uid()::text
+  AND private.is_active_member(((storage.foldername(name))[1])::uuid, auth.uid())
+);
+
 CREATE OR REPLACE FUNCTION public.delete_room_message_for_everyone(p_message_id uuid)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, private AS $$
 DECLARE uid uuid := auth.uid(); target public.room_messages; removed_path text;

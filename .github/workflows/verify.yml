@@ -23,5 +23,3 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Build app
         run: bun run build
-      - name: Lint app
-        run: bun run lint

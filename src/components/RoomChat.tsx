@@ -1,10 +1,20 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from "react";
-import { Camera, Check, CheckCheck, Eye, EyeOff, Image as ImageIcon, LoaderCircle, Mic, Plus, Reply, Send, Square, Trash2, Video, X } from "lucide-react";
+import { Ban, Camera, Check, CheckCheck, Eye, EyeOff, Image as ImageIcon, LoaderCircle, Mic, Plus, Reply, Send, Square, Trash2, Video, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { MAX_MESSAGE_LENGTH, useRoomChat, type ChatMessage } from "@/hooks/useRoomChat";
 import { chatMediaUrl, MAX_VOICE_SECONDS, validateMedia, type MediaKind } from "@/lib/chat-media";
 import { Avatar } from "@/components/Avatar";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { AudioMessage, ImageMessage, Lightbox, VideoMessage } from "@/components/ChatMedia";
 
 type Props = {
@@ -60,6 +70,7 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
     messages,
     featuresAvailable,
     featureSchemaMissing,
+    deleteForEveryone,
     uploadProgress,
     openViewOnce,
     toggleReaction,
@@ -86,6 +97,8 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
   }, [sendError]);
   const [onceViewer, setOnceViewer] = useState<OnceViewer | null>(null);
   const [actionsFor, setActionsFor] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ChatMessage | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const textRef = useRef<HTMLTextAreaElement>(null);
   const submitLockRef = useRef(false);
   const nameOf = (uid: string) => (uid === selfId ? "You" : peerName ?? "Friend");
@@ -136,6 +149,29 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
       setSendError(error instanceof Error ? error.message : "Could not open this message.");
     }
   };
+
+  const askDelete = (m: ChatMessage) => {
+    setActionsFor(null);
+    setDeleteTarget(m);
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget || deleting) return;
+    setDeleting(true);
+    try {
+      await deleteForEveryone(deleteTarget.id);
+    } catch (error) {
+      setSendError(error instanceof Error ? error.message : "Could not delete this message.");
+    } finally {
+      setDeleting(false);
+      setDeleteTarget(null);
+    }
+  };
+
+  // A reply draft must not keep showing the text of a message that was just deleted.
+  useEffect(() => {
+    if (replyTo && messages.some((m) => m.id === replyTo.id && m.deleted_at)) setReplyTo(null);
+  }, [messages, replyTo]);
 
   const reactToMessage = async (messageId: string, emoji: string) => {
     try {
@@ -322,6 +358,7 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
               setActionsFor(null);
             }}
             onReply={() => startReply(m)}
+            onDelete={() => askDelete(m)}
           />
         ))}
         {peerTyping && (
@@ -487,6 +524,29 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
           )}
         </div>
       </div>
+      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && !deleting && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete for everyone?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This message will be removed for you and {peerName ?? "your friend"}. This can't be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={deleting}
+              onClick={(event) => {
+                event.preventDefault();
+                void confirmDelete();
+              }}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deleting ? "Deleting..." : "Delete for everyone"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       {lightbox && <Lightbox url={lightbox} onClose={() => setLightbox(null)} />}
       {onceViewer && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/95 p-4" role="dialog" aria-modal="true" aria-label="View-once message">
@@ -524,6 +584,7 @@ function Bubble({
   selfId,
   onOpenOnce,
   onReact,
+  onDelete,
 }: {
   m: ChatMessage;
   own: boolean;
@@ -542,7 +603,9 @@ function Bubble({
   selfId: string;
   onOpenOnce: (message: ChatMessage) => void;
   onReact: (messageId: string, emoji: string) => void;
+  onDelete: () => void;
 }) {
+  const deleted = !!m.deleted_at;
   const press = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cancelPress = () => {
     if (press.current) clearTimeout(press.current);
@@ -557,6 +620,7 @@ function Bubble({
       data-mid={m.id}
       className={`msg-in group relative flex min-w-0 max-w-[82%] items-end gap-2 ${own ? "self-end flex-row-reverse" : "self-start"} ${firstInGroup ? "mt-2" : ""}`}
       onTouchStart={() => {
+        if (deleted) return;
         cancelPress();
         press.current = setTimeout(() => {
           onActions(true);
@@ -566,6 +630,7 @@ function Bubble({
       onTouchEnd={cancelPress}
       onTouchMove={cancelPress}
       onContextMenu={(e) => {
+        if (deleted) return;
         e.preventDefault();
         onActions(true);
       }}
@@ -574,6 +639,13 @@ function Bubble({
       <div className={`flex min-w-0 max-w-full flex-col ${own ? "items-end" : "items-start"}`}>
         {!own && firstInGroup && <span className="mb-0.5 ml-1 text-[11px] font-medium text-primary">{name}</span>}
         <div className={`min-w-0 max-w-full overflow-hidden ${shape} ${media && m.kind !== "audio" ? "p-1" : ""}`}>
+          {deleted ? (
+            <span className="flex items-center gap-1.5 px-3 py-2 text-sm italic opacity-70">
+              <Ban className="h-3.5 w-3.5 shrink-0" />
+              {own ? "You deleted this message" : "This message was deleted"}
+            </span>
+          ) : (
+            <>
           {m.reply_to_message_id && (
             <button
               type="button"
@@ -614,6 +686,8 @@ function Bubble({
               )}
             </>
           )}
+            </>
+          )}
         </div>
         {Object.entries(m.reactions ?? {}).filter(([, users]) => Array.isArray(users) && users.length > 0).length > 0 && (
           <div className="mt-1 flex flex-wrap gap-1">
@@ -625,7 +699,7 @@ function Bubble({
             ))}
           </div>
         )}
-        {actionsOpen && (
+        {actionsOpen && !deleted && (
           <div className="msg-in mt-1 flex max-w-full flex-wrap items-center gap-1 rounded-full border border-border bg-popover p-1 text-xs shadow-lg">
             {["❤️", "😂", "😮", "😢", "👍", "🙏", "🔥", "💯"].map((emoji) => (
               <button key={emoji} type="button" onClick={() => onReact(m.id, emoji)} aria-label={"React with " + emoji} className="rounded-full px-1.5 py-1.5 text-base hover:bg-secondary">{emoji}</button>
@@ -633,6 +707,11 @@ function Bubble({
             <button onClick={onReply} className="flex items-center gap-1 rounded-full px-3 py-1.5 hover:bg-secondary">
               <Reply className="h-3.5 w-3.5 text-primary" /> Reply
             </button>
+            {own && (
+              <button onClick={onDelete} className="flex items-center gap-1 rounded-full px-3 py-1.5 text-destructive hover:bg-secondary">
+                <Trash2 className="h-3.5 w-3.5" /> Delete
+              </button>
+            )}
             <button onClick={() => onActions(false)} aria-label="Close" className="rounded-full p-1.5 hover:bg-secondary">
               <X className="h-3.5 w-3.5" />
             </button>
@@ -645,18 +724,33 @@ function Bubble({
           </span>
         )}
       </div>
-      <button
-        onClick={onReply}
-        aria-label="Reply"
-        className="mb-5 hidden shrink-0 rounded-full p-1.5 text-muted-foreground opacity-0 transition-opacity hover:bg-secondary hover:text-foreground focus:opacity-100 group-hover:opacity-100 sm:block"
-      >
-        <Reply className="h-4 w-4" />
-      </button>
+      {!deleted && (
+        <>
+          <button
+            onClick={onReply}
+            aria-label="Reply"
+            className="mb-5 hidden shrink-0 rounded-full p-1.5 text-muted-foreground opacity-0 transition-opacity hover:bg-secondary hover:text-foreground focus:opacity-100 group-hover:opacity-100 sm:block"
+          >
+            <Reply className="h-4 w-4" />
+          </button>
+          {own && (
+            <button
+              onClick={onDelete}
+              aria-label="Delete for everyone"
+              title="Delete for everyone"
+              className="mb-5 hidden shrink-0 rounded-full p-1.5 text-muted-foreground opacity-0 transition-opacity hover:bg-secondary hover:text-destructive focus:opacity-100 group-hover:opacity-100 sm:block"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
+          )}
+        </>
+      )}
     </div>
   );
 }
 
 function snippet(m: ChatMessage) {
+  if (m.deleted_at) return "Message deleted";
   if (m.kind === "image") return `📷 ${m.message || "Photo"}`;
   if (m.kind === "video") return `🎥 ${m.message || "Video"}`;
   if (m.kind === "audio") return "🎤 Voice message";

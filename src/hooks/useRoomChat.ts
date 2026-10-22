@@ -23,11 +23,17 @@ export type ChatMessage = {
   viewed_at: string | null;
   viewed_by: string | null;
   reactions: Record<string, string[]>;
+  deleted_at: string | null;
+  deleted_by: string | null;
 };
 
 const LEGACY_FIELDS = "id, room_id, user_id, message, created_at, kind, media_path, media_mime, delivered_at, read_at, reply_to_message_id";
 const FIELDS = LEGACY_FIELDS + ", view_once, viewed_at, viewed_by, reactions";
+const FULL_FIELDS = FIELDS + ", deleted_at, deleted_by";
 const ALLOWED_REACTIONS = ["❤️", "😂", "😮", "😢", "👍", "🙏", "🔥", "💯"] as const;
+type DeletePayload = { already_deleted?: boolean; media_path?: string | null; view_once_media_path?: string | null };
+type Row = Partial<ChatMessage> & Record<string, unknown>;
+type QueryResult = { data: unknown; error: { message: string } | null };
 type ViewOncePayload = { already_opened?: boolean; kind: MediaKind | "text"; content: string | null; media_path: string | null; media_mime: string | null };
 
 function normalizeMessage(message: Partial<ChatMessage> & Record<string, unknown>): ChatMessage {
@@ -39,11 +45,24 @@ function normalizeMessage(message: Partial<ChatMessage> & Record<string, unknown
     reactions: message.reactions && typeof message.reactions === "object" && !Array.isArray(message.reactions)
       ? message.reactions as Record<string, string[]>
       : {},
+    deleted_at: typeof message.deleted_at === "string" ? message.deleted_at : null,
+    deleted_by: typeof message.deleted_by === "string" ? message.deleted_by : null,
   };
 }
 
 function isFeatureSchemaError(message: string) {
   return /view_once|viewed_at|viewed_by|reactions/i.test(message) && /column|schema cache|does not exist|could not find|missing/i.test(message);
+}
+
+function isMissingColumn(message: string, columns: RegExp) {
+  return columns.test(message) && /column|schema cache|does not exist|could not find|missing/i.test(message);
+}
+
+/** Next (older) column set to try when the database has not received a migration yet. */
+function downgradeFields(current: string, message: string): string | null {
+  if (current === FULL_FIELDS && isMissingColumn(message, /deleted_at|deleted_by/i)) return FIELDS;
+  if (current !== LEGACY_FIELDS && isFeatureSchemaError(message)) return LEGACY_FIELDS;
+  return null;
 }
 
 const ts = (m: ChatMessage) => new Date(m.created_at).getTime();
@@ -66,7 +85,8 @@ export function useRoomChat(roomId: string) {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [featuresAvailable, setFeaturesAvailable] = useState(false);
   const [featureSchemaMissing, setFeatureSchemaMissing] = useState(false);
-  const fieldsRef = useRef(FIELDS);
+  const [deleteAvailable, setDeleteAvailable] = useState(false);
+  const fieldsRef = useRef(FULL_FIELDS);
   const reactionLocks = useRef(new Set<string>());
   const [typingUser, setTypingUser] = useState<string | null>(null);
   const [refs, setRefs] = useState<Record<string, ChatMessage | null>>({});
@@ -85,52 +105,71 @@ export function useRoomChat(roomId: string) {
         if (!raw?.id) continue;
         const m = normalizeMessage(raw as unknown as Partial<ChatMessage> & Record<string, unknown>);
         const old = map.get(m.id);
-        map.set(m.id, old ? { ...old, ...m } : m);
+        const next = old ? { ...old, ...m } : m;
+        // Deleting is irreversible: a stale poll or late event must never bring the content back.
+        if (old?.deleted_at) {
+          next.deleted_at = old.deleted_at;
+          next.deleted_by = old.deleted_by;
+          next.message = "";
+          next.media_path = null;
+          next.media_mime = null;
+          next.reactions = {};
+        }
+        map.set(m.id, next);
       }
       return [...map.values()].sort(byTime);
     });
   }, []);
 
+  /** Record which optional columns the database really has, and derive the feature flags from it. */
+  const adoptFields = useCallback((fields: string) => {
+    fieldsRef.current = fields;
+    setFeaturesAvailable(fields !== LEGACY_FIELDS);
+    setFeatureSchemaMissing(fields === LEGACY_FIELDS);
+    setDeleteAvailable(fields === FULL_FIELDS);
+  }, []);
+
+  /** Run a messages query; if a column is missing (migration not applied yet), retry with fewer columns. */
+  const runSelect = useCallback(
+    async (run: (fields: string) => PromiseLike<QueryResult>) => {
+      let result = await run(fieldsRef.current);
+      for (let attempt = 0; attempt < 2 && result.error; attempt++) {
+        const next = downgradeFields(fieldsRef.current, result.error.message);
+        if (!next) break;
+        adoptFields(next);
+        result = await run(next);
+      }
+      return result;
+    },
+    [adoptFields],
+  );
+
   /** Fetch the latest page from the database and merge it in (never replaces). */
   const syncLatest = useCallback(async () => {
-    const run = (fields: string) => supabase.from("room_messages").select(fields).eq("room_id", roomId)
-      .order("created_at", { ascending: false }).order("id", { ascending: false }).limit(PAGE_SIZE);
-    let result = await run(fieldsRef.current);
-    if (result.error && fieldsRef.current === FIELDS && isFeatureSchemaError(result.error.message)) {
-      fieldsRef.current = LEGACY_FIELDS;
-      setFeaturesAvailable(false);
-      setFeatureSchemaMissing(true);
-      result = await run(LEGACY_FIELDS);
-    } else if (!result.error && fieldsRef.current === FIELDS) {
-      setFeaturesAvailable(true);
-      setFeatureSchemaMissing(false);
-    }
+    const result = await runSelect((fields) => supabase.from("room_messages").select(fields).eq("room_id", roomId)
+      .order("created_at", { ascending: false }).order("id", { ascending: false }).limit(PAGE_SIZE));
     if (result.error) return { ok: false, count: 0 };
-    merge((result.data ?? []).map((m) => normalizeMessage(m as unknown as Partial<ChatMessage> & Record<string, unknown>)));
-    return { ok: true, count: result.data?.length ?? 0 };
-  }, [roomId, merge]);
+    adoptFields(fieldsRef.current);
+    const rows = (result.data ?? []) as unknown as Row[];
+    merge(rows.map(normalizeMessage));
+    return { ok: true, count: rows.length };
+  }, [roomId, merge, runSelect, adoptFields]);
 
   const loadOlder = useCallback(async () => {
     const oldest = messagesRef.current[0];
     if (!oldest || loadingOlder) return;
     setLoadingOlder(true);
-    let result = await supabase.from("room_messages").select(fieldsRef.current).eq("room_id", roomId)
-      .lt("created_at", oldest.created_at).order("created_at", { ascending: false }).limit(PAGE_SIZE);
-    if (result.error && fieldsRef.current === FIELDS && isFeatureSchemaError(result.error.message)) {
-      fieldsRef.current = LEGACY_FIELDS;
-      setFeaturesAvailable(false);
-      setFeatureSchemaMissing(true);
-      result = await supabase.from("room_messages").select(LEGACY_FIELDS).eq("room_id", roomId)
-        .lt("created_at", oldest.created_at).order("created_at", { ascending: false }).limit(PAGE_SIZE);
-    }
+    const result = await runSelect((fields) => supabase.from("room_messages").select(fields).eq("room_id", roomId)
+      .lt("created_at", oldest.created_at).order("created_at", { ascending: false }).limit(PAGE_SIZE));
     setLoadingOlder(false);
     if (result.error) {
       setLoadError("Could not load earlier messages.");
       return;
     }
-    merge((result.data ?? []).map((m) => normalizeMessage(m as unknown as Partial<ChatMessage> & Record<string, unknown>)));
-    setHasMore((result.data?.length ?? 0) === PAGE_SIZE);
-  }, [roomId, merge, loadingOlder]);
+    const rows = (result.data ?? []) as unknown as Row[];
+    merge(rows.map(normalizeMessage));
+    setHasMore(rows.length === PAGE_SIZE);
+  }, [roomId, merge, loadingOlder, runSelect]);
 
   useEffect(() => {
     let active = true;
@@ -242,7 +281,7 @@ export function useRoomChat(roomId: string) {
           missing.forEach((id) => refsAsked.current.delete(id));
           return;
         }
-        const found = new Map(((data ?? []) as ChatMessage[]).map((m) => [m.id, m]));
+        const found = new Map(((data ?? []) as unknown as ChatMessage[]).map((m) => [m.id, m]));
         setRefs((r) => ({ ...r, ...Object.fromEntries(missing.map((id) => [id, found.get(id) ?? null])) }));
       });
   }, [messages, roomId]);
@@ -257,30 +296,17 @@ export function useRoomChat(roomId: string) {
     async (id: string) => {
       if (messagesRef.current.some((m) => m.id === id)) return true;
       const oldest = messagesRef.current[0];
-      let targetResult = await supabase.from("room_messages").select(fieldsRef.current).eq("room_id", roomId).eq("id", id).maybeSingle();
-      if (targetResult.error && fieldsRef.current === FIELDS && isFeatureSchemaError(targetResult.error.message)) {
-        fieldsRef.current = LEGACY_FIELDS;
-        setFeaturesAvailable(false);
-        setFeatureSchemaMissing(true);
-        targetResult = await supabase.from("room_messages").select(LEGACY_FIELDS).eq("room_id", roomId).eq("id", id).maybeSingle();
-      }
-      const target = targetResult.data;
+      const targetResult = await runSelect((fields) => supabase.from("room_messages").select(fields).eq("room_id", roomId).eq("id", id).maybeSingle());
+      const target = targetResult.data as unknown as Row | null;
       if (!target || !oldest) return false;
-      const t = normalizeMessage(target as unknown as Partial<ChatMessage> & Record<string, unknown>);
-      let rangeResult = await supabase.from("room_messages").select(fieldsRef.current).eq("room_id", roomId)
-        .gte("created_at", t.created_at).lte("created_at", oldest.created_at).order("created_at", { ascending: true }).limit(2000);
-      if (rangeResult.error && fieldsRef.current === FIELDS && isFeatureSchemaError(rangeResult.error.message)) {
-        fieldsRef.current = LEGACY_FIELDS;
-        setFeaturesAvailable(false);
-        setFeatureSchemaMissing(true);
-        rangeResult = await supabase.from("room_messages").select(LEGACY_FIELDS).eq("room_id", roomId)
-          .gte("created_at", t.created_at).lte("created_at", oldest.created_at).order("created_at", { ascending: true }).limit(2000);
-      }
+      const t = normalizeMessage(target);
+      const rangeResult = await runSelect((fields) => supabase.from("room_messages").select(fields).eq("room_id", roomId)
+        .gte("created_at", t.created_at).lte("created_at", oldest.created_at).order("created_at", { ascending: true }).limit(2000));
       if (rangeResult.error) return false;
-      merge([t, ...((rangeResult.data ?? []).map((m) => normalizeMessage(m as unknown as Partial<ChatMessage> & Record<string, unknown>)))]);
+      merge([t, ...((rangeResult.data ?? []) as unknown as Row[]).map(normalizeMessage)]);
       return true;
     },
-    [roomId, merge],
+    [roomId, merge, runSelect],
   );
 
   const notifyTyping = useCallback((userId: string, stop = false) => {
@@ -401,6 +427,30 @@ export function useRoomChat(roomId: string) {
     }
   }, [featuresAvailable]);
 
+  /** Author-only. The row is cleared server-side first; the files are removed right after (best effort). */
+  const deleteForEveryone = useCallback(async (messageId: string) => {
+    if (!deleteAvailable) throw new Error("Delete for everyone needs the WAVE database update first.");
+    const { data, error } = (await supabase.rpc("delete_room_message_for_everyone" as never, { p_message_id: messageId } as never)) as unknown as {
+      data: unknown;
+      error: { message: string } | null;
+    };
+    if (error) {
+      if (error.message.includes("NOT_AUTHOR")) throw new Error("You can only delete your own messages.");
+      if (error.message.includes("MESSAGE_NOT_FOUND")) throw new Error("This message no longer exists.");
+      throw new Error("Could not delete this message. Try again.");
+    }
+    const payload = (data ?? {}) as DeletePayload;
+    const deletedAt = new Date().toISOString();
+    setMessages((prev) => prev.map((m) => m.id === messageId
+      ? { ...m, deleted_at: m.deleted_at ?? deletedAt, deleted_by: m.user_id, message: "", media_path: null, media_mime: null, reactions: {} }
+      : m));
+    const removeFiles = (bucket: string, path: string | null | undefined) => {
+      if (path) void supabase.storage.from(bucket).remove([path]).catch(() => undefined);
+    };
+    removeFiles("chat-media", payload.media_path);
+    removeFiles("chat-view-once", payload.view_once_media_path);
+  }, [deleteAvailable]);
+
   /** Mark the partner's messages delivered, and read when the conversation is actually visible. */
   const markSeen = useCallback(
     async (read: boolean) => {
@@ -413,6 +463,8 @@ export function useRoomChat(roomId: string) {
     messages,
     featuresAvailable,
     featureSchemaMissing,
+    deleteAvailable,
+    deleteForEveryone,
     uploadProgress,
     loading,
     loadError,

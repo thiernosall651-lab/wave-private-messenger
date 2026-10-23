@@ -3,9 +3,12 @@
   "name": "wave-private-messenger",
   "main": ".output/server/index.mjs",
   "compatibility_date": "2026-10-11",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
   "vars": {
-    "SUPABASE_URL": "https://zonipaqhuqgojefmvdgf.supabase.co"
+    "SUPABASE_URL": "https://zonipaqhuqgojefmvdgf.supabase.co",
+    "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_04uGB0H0plN-wetgUR7FLg_uT8j91gh"
   },
   "assets": {
     "directory": ".output/public",

@@ -7,8 +7,8 @@
     "nodejs_compat"
   ],
   "vars": {
-    "SUPABASE_URL": "https://zonipaqhuqgojefmvdgf.supabase.co",
-    "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_04uGB0H0plN-wetgUR7FLg_uT8j91gh"
+    "SUPABASE_URL": "https://sojrvnunwqgsvfsjasig.supabase.co",
+    "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_zKL8cLzafv4p8oZ4RmIWKA_CSrjKn23"
   },
   "assets": {
     "directory": ".output/public",

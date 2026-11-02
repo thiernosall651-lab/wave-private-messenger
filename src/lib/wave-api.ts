@@ -6,6 +6,29 @@ export type RoomState = RoomSummary & {
   participants: { user_id: string; first_name: string; joined_at: string }[];
 };
 
+export type RoomListItem = {
+  room_id: string;
+  code: string;
+  status: string;
+  other_name: string | null;
+  other_avatar: string | null;
+  last_message_at: string | null;
+  last_message_kind: string | null;
+  last_message_preview: string | null;
+  last_message_mine: boolean | null;
+  last_message_deleted: boolean | null;
+  last_message_view_once: boolean | null;
+  unread_count: number;
+  joined_at: string;
+};
+
+/** Mes salles : dernier message, heure et nombre de messages non lus. */
+export async function listMyRooms(): Promise<RoomListItem[]> {
+  const { data, error } = await supabase.rpc("list_my_rooms" as never);
+  if (error) throw new Error(friendly(error.message));
+  return (data ?? []) as unknown as RoomListItem[];
+}
+
 export async function createRoom(): Promise<RoomSummary> {
   const { data, error } = await supabase.rpc("create_room");
   if (error) throw new Error(friendly(error.message));

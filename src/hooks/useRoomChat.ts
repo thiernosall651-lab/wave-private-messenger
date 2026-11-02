@@ -4,7 +4,7 @@ import type { RealtimeChannel } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
 import { mediaMimeType, uploadChatMedia, type MediaKind } from "@/lib/chat-media";
 
-export const MAX_MESSAGE_LENGTH = 500;
+export const MAX_MESSAGE_LENGTH = 4000;
 const PAGE_SIZE = 200;
 
 export type ChatMessage = {

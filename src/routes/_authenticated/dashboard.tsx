@@ -7,6 +7,7 @@ import { useWaveSession } from "@/hooks/useWaveSession";
 import { createRoom, joinRoom } from "@/lib/wave-api";
 import { supabase } from "@/integrations/supabase/client";
 import { ProfileCard } from "@/components/ProfileCard";
+import { RoomList } from "@/components/RoomList";
 
 export const Route = createFileRoute("/_authenticated/dashboard")({
   head: () => ({
@@ -77,6 +78,8 @@ function Dashboard() {
       {user && (
         <ProfileCard userId={user.id} displayName={firstName} nickname={nickname} avatarPath={avatarPath} status={status} onChange={refresh} />
       )}
+
+      {user && <RoomList userId={user.id} />}
 
       <div className="flex flex-1 flex-col justify-center gap-4 py-12">
         <button

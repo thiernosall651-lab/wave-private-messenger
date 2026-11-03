@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from "react";
-import { Ban, Camera, Check, CheckCheck, Eye, EyeOff, Image as ImageIcon, LoaderCircle, Mic, Plus, Reply, Send, Square, Trash2, Video, X } from "lucide-react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
+import { Ban, Camera, Check, CheckCheck, Eye, EyeOff, Image as ImageIcon, LoaderCircle, Mic, Plus, Reply, Send, Smile, SmilePlus, Square, Trash2, Video, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { MAX_MESSAGE_LENGTH, useRoomChat, type ChatMessage } from "@/hooks/useRoomChat";
 import { chatMediaUrl, MAX_VOICE_SECONDS, validateMedia, type MediaKind } from "@/lib/chat-media";
 import { Avatar } from "@/components/Avatar";
+import { EmojiPicker } from "@/components/EmojiPicker";
+import { dayKey, dayLabel } from "@/lib/time-labels";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -24,6 +26,7 @@ type Props = {
   peerName: string | null;
   peerAvatar: string | null;
   wallpaper: string;
+  wallpaperStyle?: CSSProperties | undefined;
   onTypingChange?: (typing: boolean) => void;
 };
 
@@ -65,7 +68,7 @@ function renderMessageWithLinks(message: string, own: boolean): ReactNode[] {
 type Pending = { kind: MediaKind; file: Blob; url: string };
 type OnceViewer = { kind: "text" | MediaKind; content: string; url: string | null };
 
-export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallpaper, onTypingChange }: Props) {
+export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallpaper, wallpaperStyle, onTypingChange }: Props) {
   const {
     messages,
     featuresAvailable,
@@ -184,7 +187,22 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
   const [text, setText] = useState("");
   const [pending, setPending] = useState<Pending | null>(null);
   const [menu, setMenu] = useState(false);
+  const [emojiOpen, setEmojiOpen] = useState(false);
   const [lightbox, setLightbox] = useState<string | null>(null);
+  const insertEmoji = (emoji: string) => {
+    const el = textRef.current;
+    const start = el?.selectionStart ?? text.length;
+    const end = el?.selectionEnd ?? text.length;
+    const next = text.slice(0, start) + emoji + text.slice(end);
+    if (next.length > MAX_MESSAGE_LENGTH) return;
+    setText(next);
+    notifyTyping(selfId);
+    requestAnimationFrame(() => {
+      el?.focus();
+      const pos = start + emoji.length;
+      el?.setSelectionRange(pos, pos);
+    });
+  };
   const listRef = useRef<HTMLDivElement>(null);
   const galleryRef = useRef<HTMLInputElement>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
@@ -320,7 +338,7 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
 
   return (
     <section className="flex min-h-0 w-full min-w-0 max-w-full flex-1 flex-col overflow-hidden" aria-label="Conversation">
-      <div ref={listRef} className={`${wallpaper} flex min-h-0 w-full min-w-0 max-w-full flex-1 flex-col gap-1 overflow-x-hidden overflow-y-auto px-3 py-4`}>
+      <div ref={listRef} style={wallpaperStyle} className={`${wallpaper} flex min-h-0 w-full min-w-0 max-w-full flex-1 flex-col gap-1 overflow-x-hidden overflow-y-auto px-3 py-4`}>
         {hasMore && !loading && (
           <button
             onClick={showOlder}
@@ -335,12 +353,20 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
         {!loading && !loadError && messages.length === 0 && (
           <p className="m-auto rounded-full bg-secondary/70 px-3 py-1 text-xs text-muted-foreground">No messages yet. Say hi!</p>
         )}
-        {messages.map((m, i) => (
+        {messages.map((m, i) => {
+          const prev = messages[i - 1];
+          const newDay = !prev || dayKey(new Date(prev.created_at)) !== dayKey(new Date(m.created_at));
+          return (
+          <Fragment key={m.id}>
+          {newDay && (
+            <div role="separator" className="my-2 self-center rounded-full bg-secondary/80 px-3 py-1 text-[11px] font-medium text-muted-foreground">
+              {dayLabel(m.created_at)}
+            </div>
+          )}
           <Bubble
-            key={m.id}
             m={m}
             own={m.user_id === selfId}
-            firstInGroup={messages[i - 1]?.user_id !== m.user_id}
+            firstInGroup={newDay || prev?.user_id !== m.user_id}
             lastInGroup={messages[i + 1]?.user_id !== m.user_id}
             name={m.user_id === selfId ? selfName : peerName ?? "Friend"}
             peerAvatar={peerAvatar}
@@ -360,7 +386,9 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
             onReply={() => startReply(m)}
             onDelete={() => askDelete(m)}
           />
-        ))}
+          </Fragment>
+          );
+        })}
         {peerTyping && (
           <div className="msg-in mt-1 flex items-end gap-2 self-start">
             <Avatar path={peerAvatar} name={peerName ?? "Friend"} size={24} />
@@ -430,7 +458,10 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
         <div className="relative flex min-w-0 max-w-full items-end gap-2">
           <button
             type="button"
-            onClick={() => setMenu((v) => !v)}
+            onClick={() => {
+              setMenu((v) => !v);
+              setEmojiOpen(false);
+            }}
             aria-label="Add photo or video"
             aria-expanded={menu}
             className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-secondary text-foreground transition-transform ${menu ? "rotate-45" : ""}`}
@@ -459,6 +490,19 @@ export function RoomChat({ roomId, selfId, selfName, peerName, peerAvatar, wallp
           <input ref={galleryRef} type="file" accept={accept} className="hidden" onChange={onFile} />
           <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={onFile} />
 
+          {emojiOpen && <EmojiPicker onPick={insertEmoji} />}
+          <button
+            type="button"
+            onClick={() => {
+              setEmojiOpen((v) => !v);
+              setMenu(false);
+            }}
+            aria-label="Emoji"
+            aria-expanded={emojiOpen}
+            className={"flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition-colors " + (emojiOpen ? "bg-primary text-primary-foreground" : "bg-secondary text-foreground")}
+          >
+            <Smile className="h-5 w-5" />
+          </button>
           <button
             type="button"
             onClick={() => setViewOnceMode((current) => !current)}
@@ -618,7 +662,7 @@ function Bubble({
   return (
     <div
       data-mid={m.id}
-      className={`msg-in group relative flex min-w-0 max-w-[82%] items-end gap-2 ${own ? "self-end flex-row-reverse" : "self-start"} ${firstInGroup ? "mt-2" : ""}`}
+      className={`msg-in group relative flex min-w-0 max-w-[82%] touch-manipulation items-end gap-2 ${own ? "self-end flex-row-reverse" : "self-start"} ${firstInGroup ? "mt-2" : ""}`}
       onTouchStart={() => {
         if (deleted) return;
         cancelPress();
@@ -633,6 +677,11 @@ function Bubble({
         if (deleted) return;
         e.preventDefault();
         onActions(true);
+      }}
+      onDoubleClick={(e) => {
+        if (deleted || (e.target as HTMLElement).closest("a,button,video,audio")) return;
+        window.getSelection()?.removeAllRanges();
+        onReact(m.id, "❤️");
       }}
     >
       {!own && (lastInGroup ? <Avatar path={peerAvatar} name={name} size={24} /> : <span className="w-6 shrink-0" />)}
@@ -732,6 +781,14 @@ function Bubble({
             className="mb-5 hidden shrink-0 rounded-full p-1.5 text-muted-foreground opacity-0 transition-opacity hover:bg-secondary hover:text-foreground focus:opacity-100 group-hover:opacity-100 sm:block"
           >
             <Reply className="h-4 w-4" />
+          </button>
+          <button
+            onClick={() => onActions(true)}
+            aria-label="React"
+            title="React (or double-click for ❤️)"
+            className="mb-5 hidden shrink-0 rounded-full p-1.5 text-muted-foreground opacity-0 transition-opacity hover:bg-secondary hover:text-foreground focus:opacity-100 group-hover:opacity-100 sm:block"
+          >
+            <SmilePlus className="h-4 w-4" />
           </button>
           {own && (
             <button

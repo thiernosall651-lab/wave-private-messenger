@@ -1,10 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ChangeEvent } from "react";
 import { toast } from "sonner";
-import { ArrowLeft, Bell, BellOff, BellRing, Copy, Mic, MicOff, Palette, Share2, UserRound, Video, VideoOff } from "lucide-react";
+import { ArrowLeft, Bell, BellOff, BellRing, Copy, ImagePlus, Mic, MicOff, Palette, Share2, UserRound, Video, VideoOff } from "lucide-react";
 
 import { useWaveAudio } from "@/hooks/useWaveAudio";
 import { useRoomPeer } from "@/hooks/useRoomPeer";
 import { usePeerAlerts } from "@/hooks/usePeerAlerts";
+import { usePeerLastSeen } from "@/hooks/useLastSeen";
+import { lastSeenLabel } from "@/lib/time-labels";
+import { fileToWallpaperDataUrl, WALLPAPER_PHOTO_KEY } from "@/lib/wallpaper-photo";
 import { STATUS_LABEL } from "@/lib/webrtc-config";
 import { RoomChat } from "@/components/RoomChat";
 import { Avatar } from "@/components/Avatar";
@@ -30,6 +33,11 @@ const WALLPAPERS = [
   { id: "wp-dots", label: "Dots" },
   { id: "wp-waves", label: "Waves" },
   { id: "wp-grid", label: "Grid" },
+  { id: "wp-aurora", label: "Aurora" },
+  { id: "wp-sunset", label: "Sunset" },
+  { id: "wp-ocean", label: "Ocean" },
+  { id: "wp-forest", label: "Forest" },
+  { id: "wp-stars", label: "Stars" },
 ] as const;
 const WP_KEY = "wave-wallpaper";
 
@@ -55,12 +63,22 @@ export function RoomStage({ roomId, code, selfId, firstName, nickname, avatarPat
   const [leaving, setLeaving] = useState(false);
   const [typing, setTyping] = useState(false);
   const [wallpaper, setWallpaper] = useState<string>("wp-default");
+  const [wallpaperPhoto, setWallpaperPhoto] = useState<string | null>(null);
+  const photoInputRef = useRef<HTMLInputElement>(null);
   const [panel, setPanel] = useState<"none" | "wallpaper" | "profile">("none");
   const [remoteHidden, setRemoteHidden] = useState(false);
 
   useEffect(() => {
     const saved = localStorage.getItem(WP_KEY);
-    if (saved && WALLPAPERS.some((w) => w.id === saved)) setWallpaper(saved);
+    let photo: string | null = null;
+    try {
+      photo = localStorage.getItem(WALLPAPER_PHOTO_KEY);
+    } catch {
+      photo = null;
+    }
+    setWallpaperPhoto(photo);
+    if (saved === "wp-photo" && photo) setWallpaper("wp-photo");
+    else if (saved && WALLPAPERS.some((w) => w.id === saved)) setWallpaper(saved);
   }, []);
 
   const chooseWallpaper = (id: string) => {
@@ -68,11 +86,34 @@ export function RoomStage({ roomId, code, selfId, firstName, nickname, avatarPat
     localStorage.setItem(WP_KEY, id);
   };
 
+  const onPhotoFile = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      toast.error("Please choose an image");
+      return;
+    }
+    try {
+      const dataUrl = await fileToWallpaperDataUrl(file);
+      localStorage.setItem(WALLPAPER_PHOTO_KEY, dataUrl);
+      setWallpaperPhoto(dataUrl);
+      chooseWallpaper("wp-photo");
+      toast.success("Wallpaper updated (only on this device)");
+    } catch {
+      toast.error("Could not use this photo — try a smaller one");
+    }
+  };
+
+  const wallpaperStyle: CSSProperties | undefined =
+    wallpaper === "wp-photo" && wallpaperPhoto ? ({ "--wp-photo": `url("${wallpaperPhoto}")` } as CSSProperties) : undefined;
+
   // "Online" = present in the room. Audio state is shown separately.
   const online = !!peer;
   const audioOk = status === "connected";
   const peerName = profile?.first_name || peer?.firstName || null;
-  const subtitle = !peer ? "Waiting for your friend..." : typing ? "typing..." : profile?.status || "Online";
+  const lastSeen = usePeerLastSeen(roomId, !peer && !!profile);
+  const subtitle = !peer ? (profile ? lastSeenLabel(lastSeen) : "Waiting for your friend...") : typing ? "typing..." : profile?.status || "Online";
 
   const { permission, enableNotifications } = usePeerAlerts({ online, name: peerName });
 
@@ -212,6 +253,25 @@ export function RoomStage({ roomId, code, selfId, firstName, nickname, avatarPat
               <span className="rounded bg-background/80 px-1">{w.label}</span>
             </button>
           ))}
+          <input ref={photoInputRef} type="file" accept="image/*" className="hidden" onChange={(e) => void onPhotoFile(e)} />
+          <button
+            type="button"
+            onClick={() => (wallpaperPhoto ? chooseWallpaper("wp-photo") : photoInputRef.current?.click())}
+            aria-label={wallpaperPhoto ? "Use my photo as wallpaper" : "Choose a photo as wallpaper"}
+            style={wallpaperPhoto ? ({ "--wp-photo": `url("${wallpaperPhoto}")` } as CSSProperties) : undefined}
+            className={`${wallpaperPhoto ? "wp-photo" : "bg-secondary"} flex h-14 w-14 shrink-0 flex-col items-center justify-end rounded-lg border-2 pb-1 text-[10px] ${
+              wallpaper === "wp-photo" ? "border-primary" : "border-border"
+            }`}
+          >
+            {!wallpaperPhoto && <ImagePlus className="mb-0.5 h-5 w-5 text-muted-foreground" />}
+            <span className="rounded bg-background/80 px-1">My photo</span>
+          </button>
+          {wallpaperPhoto && (
+            <button type="button" onClick={() => photoInputRef.current?.click()} aria-label="Change my wallpaper photo" className="flex h-14 w-14 shrink-0 flex-col items-center justify-center gap-0.5 rounded-lg border-2 border-dashed border-border text-[10px] text-muted-foreground hover:text-foreground">
+              <ImagePlus className="h-5 w-5" />
+              Change
+            </button>
+          )}
         </div>
       )}
       {panel === "profile" && (
@@ -238,6 +298,7 @@ export function RoomStage({ roomId, code, selfId, firstName, nickname, avatarPat
         peerName={peerName}
         peerAvatar={profile?.avatar_url ?? null}
         wallpaper={wallpaper}
+        wallpaperStyle={wallpaperStyle}
         onTypingChange={setTyping}
       />
 

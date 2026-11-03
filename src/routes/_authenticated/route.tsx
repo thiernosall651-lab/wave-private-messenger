@@ -1,6 +1,7 @@
 import { createFileRoute, Outlet, redirect } from "@tanstack/react-router";
 
 import { supabase } from "@/integrations/supabase/client";
+import { useHeartbeat } from "@/hooks/useLastSeen";
 import { rememberRoomDestination } from "@/lib/post-login";
 
 export const Route = createFileRoute("/_authenticated")({
@@ -14,5 +15,11 @@ export const Route = createFileRoute("/_authenticated")({
     }
     return { user: data.user };
   },
-  component: () => <Outlet />,
+  component: AuthenticatedLayout,
 });
+
+function AuthenticatedLayout() {
+  const { user } = Route.useRouteContext();
+  useHeartbeat(user.id);
+  return <Outlet />;
+}

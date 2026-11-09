@@ -6,7 +6,7 @@ import { MAX_MESSAGE_LENGTH, useRoomChat, type ChatMessage } from "@/hooks/useRo
 import { chatMediaUrl, MAX_VOICE_SECONDS, validateMedia, type MediaKind } from "@/lib/chat-media";
 import { Avatar } from "@/components/Avatar";
 import { EmojiPicker } from "@/components/EmojiPicker";
-import { dayKey, dayLabel } from "@/lib/time-labels";
+import { dayKey, dayLabel, timeWithDay } from "@/lib/time-labels";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -649,6 +649,7 @@ function Bubble({
   onReact: (messageId: string, emoji: string) => void;
   onDelete: () => void;
 }) {
+  const [infoOpen, setInfoOpen] = useState(false);
   const deleted = !!m.deleted_at;
   const press = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cancelPress = () => {
@@ -767,10 +768,24 @@ function Bubble({
           </div>
         )}
         {(lastInGroup || showStatus) && (
-          <span className="mt-0.5 flex items-center gap-1 px-1 text-[10px] text-muted-foreground">
+          <button
+            type="button"
+            onClick={() => setInfoOpen((v) => !v)}
+            aria-expanded={infoOpen}
+            aria-label="Message info"
+            title="Message info"
+            className="mt-0.5 flex items-center gap-1 px-1 text-[10px] text-muted-foreground hover:text-foreground"
+          >
             {timeFmt.format(new Date(m.created_at))}
             {own && <Receipt m={m} />}
-          </span>
+          </button>
+        )}
+        {infoOpen && !deleted && (
+          <div role="group" aria-label="Message info" className="msg-in mt-1 space-y-0.5 rounded-lg border border-border bg-popover px-3 py-2 text-[11px] leading-5 text-muted-foreground shadow-sm">
+            <div>Sent · <span className="text-foreground">{timeWithDay(m.created_at)}</span></div>
+            <div>{own ? "Delivered" : "Received"} · <span className="text-foreground">{m.delivered_at ? timeWithDay(m.delivered_at) : "—"}</span></div>
+            <div>Read · <span className="text-foreground">{m.read_at ? timeWithDay(m.read_at) : "—"}</span></div>
+          </div>
         )}
       </div>
       {!deleted && (

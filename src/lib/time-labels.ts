@@ -34,3 +34,12 @@ export function lastSeenLabel(iso: string | null, now: Date = new Date()): strin
   if (n === 1) return `Last seen yesterday at ${clock(d)}`;
   return `Last seen ${d.toLocaleDateString(undefined, { day: "numeric", month: "short" })}`;
 }
+
+/** Heure précise avec le jour : « Today 02:27 », « Yesterday 23:10 », « 2 Nov, 02:27 ». */
+export function timeWithDay(iso: string, now: Date = new Date()): string {
+  const d = new Date(iso);
+  const n = daysAgo(d, now);
+  if (n <= 0) return `Today ${clock(d)}`;
+  if (n === 1) return `Yesterday ${clock(d)}`;
+  return `${d.toLocaleDateString(undefined, { day: "numeric", month: "short" })}, ${clock(d)}`;
+}

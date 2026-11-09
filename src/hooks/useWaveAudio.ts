@@ -13,9 +13,20 @@ type SignalPayload = {
   on?: boolean;
 };
 
-type PresenceMeta = { user_id: string; first_name: string };
+type PresenceMeta = { user_id: string; first_name: string; visible?: boolean };
 
-export type PeerInfo = { userId: string; firstName: string } | null;
+const isPageVisible = () => typeof document === "undefined" || document.visibilityState === "visible";
+
+/** Micro réglé pour la voix : annulation d'écho, réduction de bruit, gain auto et isolation de la voix (ignorée si non prise en charge). */
+const AUDIO_CONSTRAINTS: MediaTrackConstraints = {
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
+  channelCount: 1,
+  ...({ voiceIsolation: true } as Record<string, unknown>),
+};
+
+export type PeerInfo = { userId: string; firstName: string; hidden: boolean } | null;
 
 type Options = {
   roomId: string;
@@ -396,7 +407,7 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
       let stream: MediaStream | null = null;
       try {
         stream = await navigator.mediaDevices.getUserMedia({
-          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+          audio: AUDIO_CONSTRAINTS,
           video: false,
         });
       } catch {
@@ -452,13 +463,14 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
           const state = channel.presenceState<PresenceMeta>();
           // Use the user id in presence metadata as the stable identity; do not
           // rely exclusively on the outer presence key when detecting the peer.
-          const seen = new Map<string, { userId: string; firstName: string }>();
+          const seen = new Map<string, { userId: string; firstName: string; hidden: boolean }>();
           for (const metas of Object.values(state)) {
             const meta = metas.find((item) => item.user_id && item.user_id !== selfId);
             if (meta?.user_id) {
               seen.set(meta.user_id, {
                 userId: meta.user_id,
                 firstName: meta.first_name || "Friend",
+                hidden: meta.visible === false,
               });
             }
           }
@@ -507,6 +519,7 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
             const trackStatus = await channel.track({
               user_id: selfId,
               first_name: firstNameRef.current,
+              visible: isPageVisible(),
             } satisfies PresenceMeta);
             if (trackStatus !== "ok") {
               console.error("[WAVE signaling] Presence track failed:", trackStatus);
@@ -610,8 +623,67 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
   // Keep presence name fresh without tearing down the call.
   useEffect(() => {
     firstNameRef.current = firstName;
-    void channelRef.current?.track({ user_id: selfId, first_name: firstName } satisfies PresenceMeta);
+    void channelRef.current?.track({ user_id: selfId, first_name: firstName, visible: isPageVisible() } satisfies PresenceMeta);
   }, [firstName, selfId]);
+
+  // Dit à l'autre personne quand on passe dans une autre appli (TikTok, etc.) et quand on revient.
+  useEffect(() => {
+    const announce = () => {
+      void channelRef.current?.track({ user_id: selfId, first_name: firstNameRef.current, visible: isPageVisible() } satisfies PresenceMeta);
+    };
+    document.addEventListener("visibilitychange", announce);
+    window.addEventListener("pageshow", announce);
+    return () => {
+      document.removeEventListener("visibilitychange", announce);
+      window.removeEventListener("pageshow", announce);
+    };
+  }, [selfId]);
+
+  // Au retour dans l'appli : si le système a coupé le micro ou la lecture, on les remet en route.
+  const micEnabledRef = useRef(true);
+  useEffect(() => {
+    micEnabledRef.current = micEnabled;
+  }, [micEnabled]);
+  useEffect(() => {
+    let healing = false;
+    const heal = async () => {
+      if (healing || teardownRef.current || document.visibilityState !== "visible") return;
+      const stream = localStreamRef.current;
+      if (!stream) return;
+      healing = true;
+      try {
+        const current = stream.getAudioTracks()[0];
+        if (!current || current.readyState === "ended") {
+          const fresh = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS, video: false });
+          const next = fresh.getAudioTracks()[0];
+          if (next) {
+            next.enabled = micEnabledRef.current;
+            for (const t of stream.getAudioTracks()) stream.removeTrack(t);
+            stream.addTrack(next);
+            const sender = pcRef.current?.getTransceivers().find((t) => t.receiver.track.kind === "audio")?.sender;
+            await sender?.replaceTrack(next);
+          }
+        }
+        const audio = remoteAudioRef.current;
+        if (audio?.srcObject && audio.paused) await audio.play().catch(() => undefined);
+      } catch {
+        /* micro encore occupé par une autre appli : on réessaiera */
+      } finally {
+        healing = false;
+      }
+    };
+    const onVisible = () => void heal();
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("pageshow", onVisible);
+    window.addEventListener("focus", onVisible);
+    const timer = setInterval(() => void heal(), 4000);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("pageshow", onVisible);
+      window.removeEventListener("focus", onVisible);
+      clearInterval(timer);
+    };
+  }, []);
 
   const toggleMic = useCallback(() => {
     const tracks = localStreamRef.current?.getAudioTracks() ?? [];

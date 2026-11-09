@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState, type CSSProperties, type ChangeEvent } from "react";
 import { toast } from "sonner";
-import { ArrowLeft, Bell, BellOff, BellRing, Copy, ImagePlus, Mic, MicOff, Palette, Share2, UserRound, Video, VideoOff } from "lucide-react";
+import { ArrowLeft, Bell, BellOff, BellRing, Copy, Ear, ImagePlus, Mic, MicOff, Palette, Share2, UserRound, Video, VideoOff, Volume2 } from "lucide-react";
 
 import { useWaveAudio } from "@/hooks/useWaveAudio";
 import { useRoomPeer } from "@/hooks/useRoomPeer";
+import { useAudioOutput } from "@/hooks/useAudioOutput";
+import { useWakeLock } from "@/hooks/useWakeLock";
 import { usePeerAlerts } from "@/hooks/usePeerAlerts";
 import { usePeerLastSeen } from "@/hooks/useLastSeen";
 import { lastSeenLabel } from "@/lib/time-labels";
@@ -111,9 +113,11 @@ export function RoomStage({ roomId, code, selfId, firstName, nickname, avatarPat
   // "Online" = present in the room. Audio state is shown separately.
   const online = !!peer;
   const audioOk = status === "connected";
+  const audioOutput = useAudioOutput(remoteAudioRef, audioOk);
+  useWakeLock(audioOk);
   const peerName = profile?.first_name || peer?.firstName || null;
   const lastSeen = usePeerLastSeen(roomId, !peer && !!profile);
-  const subtitle = !peer ? (profile ? lastSeenLabel(lastSeen) : "Waiting for your friend...") : typing ? "typing..." : profile?.status || "Online";
+  const subtitle = !peer ? (profile ? lastSeenLabel(lastSeen) : "Waiting for your friend...") : peer.hidden ? "In another app" : typing ? "typing..." : profile?.status || "Online";
 
   const { permission, enableNotifications } = usePeerAlerts({ online, name: peerName });
 
@@ -213,6 +217,19 @@ export function RoomStage({ roomId, code, selfId, firstName, nickname, avatarPat
           )}
           {errorMessage && !audioOk && <span className="ml-2 text-destructive">{errorMessage}</span>}
         </span>
+        {audioOutput.capability !== "none" && (
+          <button
+            onClick={audioOutput.toggle}
+            aria-label={audioOutput.mode === "speaker" ? "Speaker on — switch to earpiece" : "Earpiece — switch to speaker"}
+            aria-pressed={audioOutput.mode === "speaker"}
+            className={`flex shrink-0 items-center gap-1 rounded-full px-2 py-1 transition-colors ${
+              audioOutput.mode === "speaker" ? "bg-primary text-primary-foreground" : "border border-border bg-secondary text-foreground"
+            }`}
+          >
+            {audioOutput.mode === "speaker" ? <Volume2 className="h-3.5 w-3.5" /> : <Ear className="h-3.5 w-3.5" />}
+            {audioOutput.mode === "speaker" ? "Speaker" : audioOutput.capability === "route" ? "Earpiece" : "Quiet"}
+          </button>
+        )}
         {permission !== "unsupported" && (
           <button
             onClick={() => void enableNotifications()}

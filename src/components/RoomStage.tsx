@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type CSSProperties, type ChangeEvent } from "react";
 import { toast } from "sonner";
-import { ArrowLeft, Bell, BellOff, BellRing, Copy, Ear, ImagePlus, Mic, MicOff, Palette, Share2, UserRound, Video, VideoOff, Volume2 } from "lucide-react";
+import { ArrowLeft, Bell, BellOff, BellRing, Copy, Ear, ImagePlus, Info, Mic, MicOff, Palette, Share2, UserRound, Video, VideoOff, Volume2 } from "lucide-react";
 
 import { useWaveAudio } from "@/hooks/useWaveAudio";
 import { useRoomPeer } from "@/hooks/useRoomPeer";
-import { useAudioOutput } from "@/hooks/useAudioOutput";
+import { describeAudioOutput, useAudioOutput } from "@/hooks/useAudioOutput";
 import { useWakeLock } from "@/hooks/useWakeLock";
 import { usePeerAlerts } from "@/hooks/usePeerAlerts";
 import { usePeerLastSeen } from "@/hooks/useLastSeen";
@@ -115,6 +115,7 @@ export function RoomStage({ roomId, code, selfId, firstName, nickname, avatarPat
   const audioOk = status === "connected";
   const audioOutput = useAudioOutput(remoteAudioRef, audioOk);
   useWakeLock(audioOk);
+  const [audioInfo, setAudioInfo] = useState<string | null>(null);
   const peerName = profile?.first_name || peer?.firstName || null;
   const lastSeen = usePeerLastSeen(roomId, !peer && !!profile);
   const subtitle = !peer ? (profile ? lastSeenLabel(lastSeen) : "Waiting for your friend...") : peer.hidden ? "In another app" : typing ? "typing..." : profile?.status || "Online";
@@ -230,6 +231,16 @@ export function RoomStage({ roomId, code, selfId, firstName, nickname, avatarPat
             {audioOutput.mode === "speaker" ? "Speaker" : audioOutput.capability === "route" ? "Earpiece" : "Quiet"}
           </button>
         )}
+        {audioOutput.capability !== "none" && (
+          <button
+            onClick={() => (audioInfo ? setAudioInfo(null) : void describeAudioOutput(remoteAudioRef.current, audioOutput).then(setAudioInfo))}
+            aria-label="Audio info"
+            aria-expanded={audioInfo !== null}
+            className="shrink-0 rounded-full p-1 hover:text-foreground"
+          >
+            <Info className="h-3.5 w-3.5" />
+          </button>
+        )}
         {permission !== "unsupported" && (
           <button
             onClick={() => void enableNotifications()}
@@ -246,6 +257,18 @@ export function RoomStage({ roomId, code, selfId, firstName, nickname, avatarPat
           {code} <Copy className="h-3 w-3" />
         </button>
       </div>
+
+      {audioInfo && (
+        <div className="border-b border-border bg-card px-3 py-2 text-[10px] leading-4 text-muted-foreground">
+          <pre className="whitespace-pre-wrap break-words font-mono">{audioInfo}</pre>
+          <button
+            onClick={() => void navigator.clipboard?.writeText(audioInfo).then(() => toast.success("Copied — send it to Nazir"))}
+            className="mt-1 rounded-full border border-border px-3 py-1 text-foreground hover:bg-secondary"
+          >
+            Copy
+          </button>
+        </div>
+      )}
 
       <VideoPanel
         remoteStream={showRemote ? remoteVideoStream : null}

@@ -68,6 +68,13 @@ export function useAudioOutput(audioRef: RefObject<HTMLAudioElement | null>, act
       if (session) {
         try {
           session.type = mode === "earpiece" ? "play-and-record" : "playback";
+          // iOS choisit la sortie au démarrage de la lecture : on rattache le flux pour qu'il la ré-évalue.
+          if (el?.srcObject) {
+            const stream = el.srcObject;
+            el.srcObject = null;
+            el.srcObject = stream;
+            void el.play().catch(() => undefined);
+          }
         } catch {
           /* ignoré : appareil non compatible */
         }
@@ -92,4 +99,31 @@ export function useAudioOutput(audioRef: RefObject<HTMLAudioElement | null>, act
   }, []);
 
   return { capability, mode, toggle };
+}
+
+/** Résumé technique de la sortie audio du téléphone (à copier/coller pour diagnostiquer un problème d'écouteur). */
+export async function describeAudioOutput(el: HTMLAudioElement | null, state: { capability: string; mode: string }): Promise<string> {
+  const nav = navigator as SessionNav;
+  const sink = el as (HTMLAudioElement & { setSinkId?: unknown; sinkId?: string }) | null;
+  const lines = [
+    `Appareil: ${navigator.userAgent}`,
+    `Mode WAVE: ${state.mode} (${state.capability})`,
+    `audioSession: ${nav.audioSession ? `oui, type=${nav.audioSession.type}` : "non"}`,
+    `setSinkId: ${sink && "setSinkId" in sink ? `oui (sinkId="${sink.sinkId ?? ""}")` : "non"}`,
+  ];
+  if (el) {
+    const tracks = (el.srcObject as MediaStream | null)?.getAudioTracks() ?? [];
+    lines.push(`Lecture: paused=${el.paused} muted=${el.muted} volume=${el.volume}`);
+    lines.push(`Piste distante: ${tracks.length ? tracks.map((t) => t.readyState + (t.muted ? "/muted" : "")).join(", ") : "aucune"}`);
+  }
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const outs = devices.filter((d) => d.kind === "audiooutput");
+    const ins = devices.filter((d) => d.kind === "audioinput");
+    lines.push(`Sorties audio (${outs.length}): ${outs.map((d) => d.label || "?").join(" | ") || "aucune"}`);
+    lines.push(`Entrées audio (${ins.length}): ${ins.map((d) => d.label || "?").join(" | ") || "aucune"}`);
+  } catch {
+    lines.push("Liste des périphériques: indisponible");
+  }
+  return lines.join("\n");
 }

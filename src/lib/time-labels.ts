@@ -24,15 +24,18 @@ export function dayLabel(iso: string, now: Date = new Date()): string {
   });
 }
 
-/** Sous-titre de l'en-tête quand l'ami est hors ligne. */
+/** Heure de déconnexion affichée sous le nom, avec une formulation courte façon WhatsApp. */
 export function lastSeenLabel(iso: string | null, now: Date = new Date()): string {
-  if (!iso) return "Offline";
+  if (!iso) return "Hors ligne";
   const d = new Date(iso);
-  if (now.getTime() - d.getTime() < 120_000) return "Last seen just now";
   const n = daysAgo(d, now);
-  if (n <= 0) return `Last seen today at ${clock(d)}`;
-  if (n === 1) return `Last seen yesterday at ${clock(d)}`;
-  return `Last seen ${d.toLocaleDateString(undefined, { day: "numeric", month: "short" })}`;
+  if (n <= 0) return `Hors ligne à ${clock(d)}`;
+  if (n === 1) return `Hors ligne hier à ${clock(d)}`;
+  return `Hors ligne le ${d.toLocaleDateString("fr-FR", {
+    day: "numeric",
+    month: "long",
+    ...(d.getFullYear() !== now.getFullYear() ? { year: "numeric" as const } : {}),
+  })} à ${clock(d)}`;
 }
 
 /** Heure précise avec le jour : « Today 02:27 », « Yesterday 23:10 », « 2 Nov, 02:27 ». */

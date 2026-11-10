@@ -117,8 +117,9 @@ export function RoomStage({ roomId, code, selfId, firstName, nickname, avatarPat
   useWakeLock(audioOk);
   const [audioInfo, setAudioInfo] = useState<string | null>(null);
   const peerName = profile?.first_name || peer?.firstName || null;
-  const lastSeen = usePeerLastSeen(roomId, !peer && !!profile);
-  const subtitle = !peer ? (profile ? lastSeenLabel(lastSeen) : "Waiting for your friend...") : peer.hidden ? "In another app" : typing ? "typing..." : profile?.status || "Online";
+  // Fetch last activity whenever the peer is absent, even before profile metadata resolves.
+  const lastSeen = usePeerLastSeen(roomId, !peer);
+  const subtitle = !peer ? lastSeenLabel(lastSeen) : peer.hidden ? "In another app" : typing ? "typing..." : profile?.status || "Online";
 
   const { permission, enableNotifications } = usePeerAlerts({ online, name: peerName });
 

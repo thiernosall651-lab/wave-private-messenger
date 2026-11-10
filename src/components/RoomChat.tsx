@@ -767,7 +767,7 @@ function Bubble({
             </button>
           </div>
         )}
-        {(lastInGroup || showStatus) && (
+        {true && (
           <button
             type="button"
             onClick={() => setInfoOpen((v) => !v)}

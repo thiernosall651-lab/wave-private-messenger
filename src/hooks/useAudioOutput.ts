@@ -68,13 +68,9 @@ export function useAudioOutput(audioRef: RefObject<HTMLAudioElement | null>, act
       if (session) {
         try {
           session.type = mode === "earpiece" ? "play-and-record" : "playback";
-          // iOS choisit la sortie au démarrage de la lecture : on rattache le flux pour qu'il la ré-évalue.
-          if (el?.srcObject) {
-            const stream = el.srcObject;
-            el.srcObject = null;
-            el.srcObject = stream;
-            void el.play().catch(() => undefined);
-          }
+          // Ne jamais détacher/rattacher le flux WebRTC lors d'un changement de sortie :
+          // Safari iOS peut interrompre la lecture et renégocier la route audio.
+          if (el?.srcObject && el.paused) void el.play().catch(() => undefined);
         } catch {
           /* ignoré : appareil non compatible */
         }

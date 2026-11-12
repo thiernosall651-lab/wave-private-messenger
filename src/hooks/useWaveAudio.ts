@@ -74,6 +74,12 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
   const pcCreatedAtRef = useRef(0);
   const lastRecoverRef = useRef(0);
   const attemptsRef = useRef(0);
+  const eventsRef = useRef<string[]>([]);
+  const peerHiddenRef = useRef(false);
+  const logEvent = useCallback((message: string) => {
+    const at = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    eventsRef.current = [...eventsRef.current.slice(-29), `${at} ${message}`];
+  }, []);
   const recoverRef = useRef<() => void>(() => {});
   const disconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Video is optional and fully separate from the audio stream: the video
@@ -200,6 +206,7 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
 
       pc.onconnectionstatechange = () => {
         if (teardownRef.current || pcRef.current !== pc) return;
+        logEvent(`pc ${pc.connectionState}`);
         switch (pc.connectionState) {
           case "connected":
             if (disconnectTimerRef.current) {
@@ -264,10 +271,13 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
   recoverRef.current = () => {
     const remote = peerIdRef.current;
     if (!remote || teardownRef.current || !localStreamRef.current) return;
+    // L'ami est dans une autre appli : son téléphone met WAVE en pause, inutile de reconstruire en boucle.
+    if (peerHiddenRef.current) return;
     const now = Date.now();
     if (now - lastRecoverRef.current < RECOVER_COOLDOWN_MS) return;
     lastRecoverRef.current = now;
     attemptsRef.current += 1;
+    logEvent(`reprise #${attemptsRef.current}`);
     if (attemptsRef.current > MAX_ATTEMPTS_BEFORE_FAILED) {
       setStatus("failed");
       setErrorMessage("Audio connection failed. Still retrying...");
@@ -476,6 +486,18 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
           }
           const other = [...seen.values()][0] ?? null;
           setPeer(other);
+          {
+            const wasHidden = peerHiddenRef.current;
+            const wasPresent = peerIdRef.current !== null;
+            peerHiddenRef.current = other?.hidden ?? false;
+            if (!!other !== wasPresent) logEvent(other ? "ami en ligne" : "ami hors ligne");
+            else if (other && other.hidden !== wasHidden) logEvent(other.hidden ? "ami dans une autre appli" : "ami de retour dans l'appli");
+            // Il revient dans WAVE : on relance tout de suite la connexion si elle est tombée pendant son absence.
+            if (other && wasHidden && !other.hidden && pcRef.current && pcRef.current.connectionState !== "connected") {
+              lastRecoverRef.current = 0;
+              recoverRef.current();
+            }
+          }
 
           if (!other) {
             setRemoteCameraOn(false);
@@ -553,6 +575,11 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
     let stalls = 0;
     const watchdog = setInterval(async () => {
       if (teardownRef.current || !peerIdRef.current || !localStreamRef.current) return;
+      if (peerHiddenRef.current) {
+        lastBytes = -1;
+        stalls = 0;
+        return;
+      }
       const pc = pcRef.current;
       if (!pc || pc.connectionState !== "connected") {
         lastBytes = -1;
@@ -577,6 +604,7 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
         if (stalls >= 3) {
           stalls = 0;
           lastBytes = -1;
+          logEvent("plus de données reçues");
           recoverRef.current();
         }
       } catch {
@@ -685,6 +713,44 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
     };
   }, []);
 
+  /** État de la connexion pour diagnostiquer une instabilité (chemin réseau, perte, coupures récentes). */
+  const getDiagnostics = useCallback(async (): Promise<string> => {
+    const pc = pcRef.current;
+    const lines = [
+      `Connexion: ${pc ? `${pc.connectionState} · ice ${pc.iceConnectionState} · signaling ${pc.signalingState}` : "aucune"}`,
+      `Reprises en cours: ${attemptsRef.current}`,
+      `Ami: ${peerHiddenRef.current ? "dans une autre appli" : peerIdRef.current ? "dans l'appli" : "absent"}`,
+    ];
+    if (pc) {
+      try {
+        const report = await pc.getStats();
+        const all: Record<string, unknown>[] = [];
+        report.forEach((r) => all.push(r as unknown as Record<string, unknown>));
+        const byId = new Map(all.map((r) => [String(r["id"]), r]));
+        const pair = all.find((r) => r["type"] === "candidate-pair" && (r["nominated"] === true || r["state"] === "succeeded"));
+        const inbound = all.find((r) => r["type"] === "inbound-rtp" && (r["kind"] ?? r["mediaType"]) === "audio");
+        if (pair) {
+          const local = byId.get(String(pair["localCandidateId"]));
+          const remote = byId.get(String(pair["remoteCandidateId"]));
+          const rtt = Number(pair["currentRoundTripTime"]);
+          lines.push(
+            `Chemin: local=${String(local?.["candidateType"] ?? "?")} (${String(local?.["networkType"] ?? "?")}) · distant=${String(remote?.["candidateType"] ?? "?")} · RTT=${Number.isFinite(rtt) ? Math.round(rtt * 1000) + " ms" : "?"}`,
+          );
+        }
+        if (inbound) {
+          const lost = Number(inbound["packetsLost"] ?? 0);
+          const got = Number(inbound["packetsReceived"] ?? 0);
+          const jitter = Number(inbound["jitter"]);
+          lines.push(`Audio reçu: ${got} paquets, ${lost} perdus, gigue ${Number.isFinite(jitter) ? Math.round(jitter * 1000) + " ms" : "?"}`);
+        }
+      } catch {
+        lines.push("Statistiques réseau: indisponibles");
+      }
+    }
+    lines.push("Derniers événements:", ...(eventsRef.current.length ? eventsRef.current.slice(-14) : ["(aucun)"]));
+    return lines.join("\n");
+  }, []);
+
   const toggleMic = useCallback(() => {
     const tracks = localStreamRef.current?.getAudioTracks() ?? [];
     if (tracks.length === 0) return;
@@ -774,6 +840,7 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
     status,
     micEnabled,
     toggleMic,
+    getDiagnostics,
     peer,
     errorMessage,
     remoteAudioRef,

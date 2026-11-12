@@ -60,6 +60,7 @@ export function RoomStage({ roomId, code, selfId, firstName, nickname, avatarPat
     localVideoStream,
     remoteVideoStream,
     remoteCameraOn,
+    getDiagnostics,
   } = useWaveAudio({ roomId, selfId, firstName });
   const { peer: profile, announce } = useRoomPeer(roomId, selfId, peer ? `${peer.firstName}` : null);
   const [leaving, setLeaving] = useState(false);
@@ -234,7 +235,7 @@ export function RoomStage({ roomId, code, selfId, firstName, nickname, avatarPat
         )}
         {audioOutput.capability !== "none" && (
           <button
-            onClick={() => (audioInfo ? setAudioInfo(null) : void describeAudioOutput(remoteAudioRef.current, audioOutput).then(setAudioInfo))}
+            onClick={() => (audioInfo ? setAudioInfo(null) : void Promise.all([getDiagnostics(), describeAudioOutput(remoteAudioRef.current, audioOutput)]).then(([call, device]) => setAudioInfo(`${call}\n\n${device}`)))}
             aria-label="Audio info"
             aria-expanded={audioInfo !== null}
             className="shrink-0 rounded-full p-1 hover:text-foreground"

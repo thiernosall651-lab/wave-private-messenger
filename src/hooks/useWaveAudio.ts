@@ -63,6 +63,7 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
   const [remoteCameraOn, setRemoteCameraOn] = useState(false);
 
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
+  const remoteAudioTrackRef = useRef<MediaStreamTrack | null>(null);
   const channelRef = useRef<RealtimeChannel | null>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -114,6 +115,7 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
     videoSenderRef.current = null;
     setRemoteVideoStream(null);
     if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
+    remoteAudioTrackRef.current = null;
   }, []);
 
   const applyVideoTrack = useCallback(async (track: MediaStreamTrack | null) => {
@@ -193,14 +195,24 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
         const stream = event.streams[0] ?? new MediaStream([event.track]);
         const audio = remoteAudioRef.current;
         if (!audio) return;
+        remoteAudioTrackRef.current = event.track;
+        audio.autoplay = true;
+        audio.playsInline = true;
+        audio.muted = false;
         if (audio.srcObject !== stream) audio.srcObject = stream;
 
         const tryPlay = () => {
-          if (audio.srcObject === stream) void audio.play().catch(() => {
-            // Retry from the microphone button's user gesture if autoplay is blocked.
-          });
+          if (audio.srcObject === stream && audio.paused) {
+            void audio.play().then(() => logEvent("lecture audio distante active")).catch(() => {
+              logEvent("lecture bloquée : toucher le bouton micro pour relancer le son");
+            });
+          }
         };
-        event.track.onunmute = tryPlay;
+        event.track.onmute = () => logEvent("piste audio distante muette");
+        event.track.onunmute = () => {
+          logEvent("piste audio distante réactivée");
+          tryPlay();
+        };
         tryPlay();
       };
 
@@ -571,41 +583,36 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
     void start();
 
     // Watchdog: detect "online but no audio" and recover automatically.
-    let lastBytes = -1;
-    let stalls = 0;
+    let remoteMutedSince = 0;
     const watchdog = setInterval(async () => {
       if (teardownRef.current || !peerIdRef.current || !localStreamRef.current) return;
       if (peerHiddenRef.current) {
-        lastBytes = -1;
-        stalls = 0;
+        remoteMutedSince = 0;
         return;
       }
       const pc = pcRef.current;
       if (!pc || pc.connectionState !== "connected") {
-        lastBytes = -1;
-        stalls = 0;
+        remoteMutedSince = 0;
         if (!pc || Date.now() - pcCreatedAtRef.current > CONNECT_TIMEOUT_MS) recoverRef.current();
         return;
       }
       try {
-        const stats = await pc.getStats();
-        let bytes = 0;
-        stats.forEach((r) => {
-          const s = r as { type: string; kind?: string; mediaType?: string; bytesReceived?: number; state?: string };
-          if (s.type === "inbound-rtp" && (s.kind ?? s.mediaType) === "audio") bytes += s.bytesReceived ?? 0;
-          // Also count traffic on the working network path (it includes RTCP). A friend who
-          // muted their microphone may send almost no audio packets, but the path itself keeps
-          // carrying data — so a muted friend must never look like a dead connection.
-          if (s.type === "candidate-pair" && s.state === "succeeded") bytes += s.bytesReceived ?? 0;
-        });
-        if (lastBytes >= 0 && bytes <= lastBytes) stalls += 1;
-        else stalls = 0;
-        lastBytes = bytes;
-        if (stalls >= 3) {
-          stalls = 0;
-          lastBytes = -1;
-          logEvent("plus de données reçues");
-          recoverRef.current();
+        const audio = remoteAudioRef.current;
+        if (audio?.srcObject && audio.paused) {
+          await audio.play().catch(() => undefined);
+        }
+        const track = remoteAudioTrackRef.current;
+        if (track?.readyState === "ended" || track?.muted) {
+          if (!remoteMutedSince) remoteMutedSince = Date.now();
+          // A sustained muted/ended receiver track indicates a real media stall.
+          // Do not use zero packet growth alone: Opus DTX can be silent between words.
+          if (Date.now() - remoteMutedSince >= 9000) {
+            remoteMutedSince = 0;
+            logEvent("piste audio distante bloquée, reprise WebRTC");
+            recoverRef.current();
+          }
+        } else {
+          remoteMutedSince = 0;
         }
       } catch {
         /* noop */

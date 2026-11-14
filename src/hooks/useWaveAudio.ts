@@ -688,15 +688,35 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
       healing = true;
       try {
         const current = stream.getAudioTracks()[0];
-        if (!current || current.readyState === "ended") {
+        // iOS Safari can leave a microphone track present but muted after an
+        // app switch or an audio-session interruption. Treat that like an
+        // ended track when the page becomes active again.
+        const micNeedsRestart = !current || current.readyState === "ended" || current.muted;
+        if (micNeedsRestart && micEnabledRef.current) {
+          logEvent(current?.muted ? "micro iPhone resté muet après interruption" : "micro absent ou terminé : nouvelle capture");
           const fresh = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS, video: false });
           const next = fresh.getAudioTracks()[0];
           if (next) {
             next.enabled = micEnabledRef.current;
-            for (const t of stream.getAudioTracks()) stream.removeTrack(t);
+            const sender = pcRef.current?.getSenders().find((item) => item.track?.kind === "audio")
+              ?? pcRef.current?.getTransceivers().find((item) => item.receiver.track.kind === "audio")?.sender;
+            // Replace the sender before swapping the stream track so a failed
+            // capture/replace never leaves WAVE with no usable microphone.
+            if (sender) await sender.replaceTrack(next);
+            for (const t of stream.getAudioTracks()) {
+              stream.removeTrack(t);
+              t.onmute = null;
+              t.onunmute = null;
+              t.onended = null;
+              t.stop();
+            }
             stream.addTrack(next);
-            const sender = pcRef.current?.getTransceivers().find((t) => t.receiver.track.kind === "audio")?.sender;
-            await sender?.replaceTrack(next);
+            next.onmute = () => logEvent("micro local interrompu par iOS");
+            next.onunmute = () => logEvent("micro local réactivé");
+            next.onended = () => logEvent("piste micro locale terminée");
+            logEvent("nouvelle piste micro active");
+          } else {
+            fresh.getTracks().forEach((track) => track.stop());
           }
         }
         const audio = remoteAudioRef.current;
@@ -771,7 +791,37 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
     // on browsers that reject autoplay during call setup.
     const remoteAudio = remoteAudioRef.current;
     if (remoteAudio?.srcObject) void remoteAudio.play().catch(() => {});
-  }, []);
+    // A direct tap is the most reliable iOS Safari gesture for reacquiring a
+    // microphone after another app temporarily took the audio session.
+    if (next) {
+      const current = localStreamRef.current?.getAudioTracks()[0];
+      if (!current || current.readyState === "ended" || current.muted) {
+        const stream = localStreamRef.current;
+        if (stream) {
+          void navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS, video: false }).then(async (fresh) => {
+            const replacementTrack = fresh.getAudioTracks()[0];
+            if (!replacementTrack || teardownRef.current) {
+              fresh.getTracks().forEach((track) => track.stop());
+              return;
+            }
+            replacementTrack.enabled = true;
+            const sender = pcRef.current?.getSenders().find((item) => item.track?.kind === "audio")
+              ?? pcRef.current?.getTransceivers().find((item) => item.receiver.track.kind === "audio")?.sender;
+            if (sender) await sender.replaceTrack(replacementTrack);
+            for (const track of stream.getAudioTracks()) {
+              stream.removeTrack(track);
+              track.stop();
+            }
+            stream.addTrack(replacementTrack);
+            replacementTrack.onmute = () => logEvent("micro local interrompu par iOS");
+            replacementTrack.onunmute = () => logEvent("micro local réactivé");
+            replacementTrack.onended = () => logEvent("piste micro locale terminée");
+            logEvent("micro relancé après action utilisateur");
+          }).catch(() => logEvent("Safari n'a pas autorisé la reprise du micro"));
+        }
+      }
+    }
+  }, [logEvent]);
 
   const stopCamera = useCallback(() => {
     const track = localVideoTrackRef.current;

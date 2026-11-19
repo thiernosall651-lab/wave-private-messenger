@@ -67,7 +67,7 @@ export function useAudioOutput(audioRef: RefObject<HTMLAudioElement | null>, act
     if (capability === "route") {
       if (session) {
         try {
-          session.type = mode === "earpiece" ? "play-and-record" : "playback";
+          session.type = mode === "earpiece" ? "play-and-record" : "auto";
           // Ne jamais détacher/rattacher le flux WebRTC lors d'un changement de sortie :
           // Safari iOS peut interrompre la lecture et renégocier la route audio.
           if (el?.srcObject && el.paused) void el.play().catch(() => undefined);

@@ -197,7 +197,7 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
         if (!audio) return;
         remoteAudioTrackRef.current = event.track;
         audio.autoplay = true;
-        audio.playsInline = true;
+        (audio as HTMLAudioElement & { playsInline?: boolean }).playsInline = true;
         audio.muted = false;
         if (audio.srcObject !== stream) audio.srcObject = stream;
 
@@ -748,6 +748,8 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
       `Reprises en cours: ${attemptsRef.current}`,
       `Ami: ${peerHiddenRef.current ? "dans une autre appli" : peerIdRef.current ? "dans l'appli" : "absent"}`,
     ];
+    const mic = localStreamRef.current?.getAudioTracks()[0];
+    lines.push(`Micro local: ${mic ? `${mic.readyState} · ${mic.muted ? "COUPÉ PAR LE SYSTÈME" : "actif"} · ${mic.enabled ? "activé" : "désactivé"}` : "aucun"}`);
     if (pc) {
       try {
         const report = await pc.getStats();
@@ -763,6 +765,18 @@ export function useWaveAudio({ roomId, selfId, firstName }: Options) {
           lines.push(
             `Chemin: local=${String(local?.["candidateType"] ?? "?")} (${String(local?.["networkType"] ?? "?")}) · distant=${String(remote?.["candidateType"] ?? "?")} · RTT=${Number.isFinite(rtt) ? Math.round(rtt * 1000) + " ms" : "?"}`,
           );
+        }
+        const outbound = all.find((r) => r["type"] === "outbound-rtp" && (r["kind"] ?? r["mediaType"]) === "audio");
+        const source = all.find((r) => r["type"] === "media-source" && r["kind"] === "audio");
+        if (outbound) {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          const again: Record<string, unknown>[] = [];
+          (await pc.getStats()).forEach((r) => again.push(r as unknown as Record<string, unknown>));
+          const next = again.find((r) => r["type"] === "outbound-rtp" && (r["kind"] ?? r["mediaType"]) === "audio");
+          const before = Number(outbound["bytesSent"] ?? 0);
+          const after = Number(next?.["bytesSent"] ?? before);
+          const level = Number(source?.["audioLevel"]);
+          lines.push(`Voix envoyée: ${after} octets (+${after - before} en 1 s) · niveau micro ${Number.isFinite(level) ? level.toFixed(3) : "?"}`);
         }
         if (inbound) {
           const lost = Number(inbound["packetsLost"] ?? 0);
